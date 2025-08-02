@@ -2,6 +2,8 @@
 
 Turn your Orange Pi (or similar SBC) into a secure USB ethernet gadget that routes all connected device traffic through VPN with automatic failover.
 
+![Orange Pi Zero USB VPN Router Setup](images/orangepi-zero-setup.webp)
+
 ## Features
 
 - **USB Ethernet Gadget**: Connect any device via USB and get network access
@@ -72,6 +74,14 @@ systemctl start openvpn-client@backup
 - Orange Pi Zero/One/PC
 - Raspberry Pi Zero W/2W (USB gadget capable)
 - Any Linux SBC with USB OTG support
+
+### Orange Pi Zero Pinout Reference
+![Orange Pi Zero Pinout](images/pinout.webp)
+
+**Connection Notes:**
+- Use the micro-USB port (not the USB-A port) for gadget mode
+- UART pins for console access: TX (pin 8), RX (pin 10), GND (pin 6)
+- Power can be supplied through micro-USB or GPIO pins
 
 ## Requirements
 
