@@ -63,22 +63,40 @@ detect_distro() {
 
 # Install required packages
 install_packages() {
-    log_info "Installing required packages..."
+    log_info "Checking and installing required packages..."
     
     case $OS in
         debian|ubuntu|armbian)
-            apt-get update
-            apt-get install -y \
-                dnsmasq \
-                iptables-persistent \
-                tcpdump \
-                curl \
-                wget \
-                gnupg \
-                lsb-release \
-                ca-certificates \
-                openvpn \
-                systemd-resolved
+            # List of required packages
+            local packages=(
+                dnsmasq
+                iptables-persistent
+                tcpdump
+                curl
+                wget
+                gnupg
+                lsb-release
+                ca-certificates
+                openvpn
+                jq
+            )
+            
+            # Check which packages need to be installed
+            local to_install=()
+            for pkg in "${packages[@]}"; do
+                if ! dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+                    to_install+=("$pkg")
+                fi
+            done
+            
+            # Only run apt if there are packages to install
+            if [ ${#to_install[@]} -gt 0 ]; then
+                log_info "Need to install: ${to_install[*]}"
+                apt-get update
+                apt-get install -y "${to_install[@]}"
+            else
+                log_info "All required packages are already installed"
+            fi
             ;;
         *)
             log_error "Unsupported distribution: $OS"
