@@ -1,0 +1,29 @@
+# Temporary files
+*.tmp
+*.log
+*.swp
+*.swo
+*~
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Config files that might contain secrets
+*.ovpn
+*.conf
+*.key
+*.crt
+*.pem
+
+# Except example configs
+!example.conf
+!example.ovpn
+
+# IDE
+.vscode/
+.idea/
+
+# Backup files
+*.bak
+*.backup
