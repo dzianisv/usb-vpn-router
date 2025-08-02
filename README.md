@@ -94,8 +94,8 @@ systemctl start openvpn-client@backup
 
 **SSH access lost:**
 - Connect via UART/console
-- Run: `tailscale up --exit-node=""`
 - The script now prevents this with split routing
+- Emergency fix: `tailscale set --exit-node-allow-lan-access=true`
 
 ## License
 

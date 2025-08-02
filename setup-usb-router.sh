@@ -358,8 +358,8 @@ EOF
             log_info "Tailscale is authenticated"
             log_info "Split routing will be configured - USB clients through VPN, device keeps local access"
             
-            # Make sure we're NOT using exit node for the device itself
-            tailscale up --exit-node="" 2>/dev/null || true
+            # Make sure we allow local network access
+            tailscale set --exit-node-allow-lan-access=true 2>/dev/null || true
         else
             log_warn "Tailscale not authenticated yet. Run 'tailscale up' first"
         fi
@@ -497,9 +497,9 @@ select_exit_node() {
 enable_tailscale_routing() {
     echo "Enabling Tailscale split routing (USB clients only)..."
     
-    # Make sure device itself is NOT using exit node
+    # Make sure device maintains local network access
     echo "Ensuring device maintains local network access..."
-    tailscale up --exit-node="" 2>/dev/null || true
+    tailscale set --exit-node-allow-lan-access=true 2>/dev/null || true
     
     # Check if Tailscale is connected
     if ! tailscale status &>/dev/null; then
