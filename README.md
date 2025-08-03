@@ -92,10 +92,17 @@ systemctl start openvpn-client@backup
 
 ## Troubleshooting
 
+**macOS "Allow Accessory to Connect" prompt:**
+- When first connecting, macOS shows a permission dialog
+- The USB interface won't appear until you click "Allow"
+- The watchdog service automatically handles this delay
+- Check status: `systemctl status usb-interface-watchdog`
+- View logs: `tail -f /var/log/usb-interface-watchdog.log`
+
 **No DHCP lease:**
 - Check USB cable (must be data cable, not charge-only)
 - Verify g_ether module: `lsmod | grep g_ether`
-- Restart dnsmasq: `systemctl restart dnsmasq`
+- Check watchdog: `usb-interface-watchdog check`
 
 **No internet access:**
 - Check VPN status: `usb-router-status`

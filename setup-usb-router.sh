@@ -824,7 +824,112 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
     
+    # Create USB interface watchdog to handle macOS permission delays
+    cat > /usr/local/bin/usb-interface-watchdog << 'EOF'
+#!/bin/bash
+# Watchdog to handle USB interface appearing after macOS permission approval
+
+LOG_FILE="/var/log/usb-interface-watchdog.log"
+USB_INTERFACE="usb0"
+CHECK_INTERVAL=10
+MAX_WAIT=300  # 5 minutes max wait
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+wait_for_interface() {
+    local waited=0
+    
+    while [ $waited -lt $MAX_WAIT ]; do
+        if ip link show $USB_INTERFACE &>/dev/null; then
+            log_msg "USB interface $USB_INTERFACE detected!"
+            
+            # Configure the interface
+            ip link set $USB_INTERFACE up
+            ip addr add 192.168.64.1/24 dev $USB_INTERFACE 2>/dev/null || true
+            
+            # Restart dnsmasq if it's not running
+            if ! systemctl is-active dnsmasq &>/dev/null; then
+                log_msg "Starting dnsmasq..."
+                systemctl restart dnsmasq
+            elif ! systemctl status dnsmasq | grep -q "usb0"; then
+                log_msg "Restarting dnsmasq to bind to USB interface..."
+                systemctl restart dnsmasq
+            fi
+            
+            return 0
+        fi
+        
+        sleep $CHECK_INTERVAL
+        waited=$((waited + CHECK_INTERVAL))
+    done
+    
+    log_msg "Timeout waiting for USB interface"
+    return 1
+}
+
+monitor_interface() {
+    log_msg "USB interface watchdog started"
+    
+    while true; do
+        if ! ip link show $USB_INTERFACE &>/dev/null; then
+            log_msg "USB interface not found, waiting for macOS permission..."
+            wait_for_interface
+        else
+            # Check if dnsmasq is healthy
+            if ! systemctl is-active dnsmasq &>/dev/null; then
+                log_msg "dnsmasq is not running, restarting..."
+                systemctl restart dnsmasq
+            fi
+        fi
+        
+        sleep $CHECK_INTERVAL
+    done
+}
+
+case "${1:-monitor}" in
+    "monitor")
+        monitor_interface
+        ;;
+    "check")
+        if ip link show $USB_INTERFACE &>/dev/null; then
+            echo "USB interface: UP"
+            systemctl is-active dnsmasq && echo "dnsmasq: ACTIVE" || echo "dnsmasq: INACTIVE"
+        else
+            echo "USB interface: DOWN (waiting for macOS permission?)"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {monitor|check}"
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x /usr/local/bin/usb-interface-watchdog
+    
+    # Create systemd service for USB watchdog
+    cat > /etc/systemd/system/usb-interface-watchdog.service << EOF
+[Unit]
+Description=USB Interface Watchdog for macOS Permission Delays
+After=network.target
+Before=dnsmasq.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/usb-interface-watchdog monitor
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
     systemctl daemon-reload
+    systemctl enable usb-interface-watchdog.service
+    log_info "USB interface watchdog enabled (handles macOS permission delays)"
     
     if [ "$USE_VPN_FAILOVER" = "true" ]; then
         systemctl enable usb-router-vpn-monitor.service
@@ -867,10 +972,11 @@ main() {
     log_info "4. Configure Tailscale: run 'tailscale up'"
     log_info ""
     log_info "Helper commands:"
-    log_info "  usb-router-status      - Check router status"
-    log_info "  usb-router-reset       - Reset USB interface"
-    log_info "  usb-router-tailscale   - Switch between local/Tailscale routing"
-    log_info "  usb-router-vpn-monitor - Check VPN failover status"
+    log_info "  usb-router-status          - Check router status"
+    log_info "  usb-router-reset           - Reset USB interface"
+    log_info "  usb-router-tailscale       - Switch between local/Tailscale routing"
+    log_info "  usb-router-vpn-monitor     - Check VPN failover status"
+    log_info "  usb-interface-watchdog     - Check USB interface watchdog"
     log_info ""
     log_info "VPN Failover:"
     log_info "  - Tailscale is primary VPN (when available)"
