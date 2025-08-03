@@ -72,6 +72,7 @@ systemctl start openvpn-client@backup
 ## Supported Devices
 
 - Orange Pi Zero/One/PC
+- Orange Pi 4 LTS (RK3399 with USB-C)
 - Raspberry Pi Zero W/2W (USB gadget capable)
 - Any Linux SBC with USB OTG support
 
@@ -92,10 +93,26 @@ systemctl start openvpn-client@backup
 
 ## Troubleshooting
 
+**macOS USB Interface Not Active:**
+- After connecting the USB cable and allowing the accessory, the interface may appear as "inactive"
+- Manually activate it with:
+  ```bash
+  sudo ifconfig en8 up          # Bring the interface up
+  sudo ipconfig set en8 DHCP     # Trigger DHCP client
+  ```
+- Replace `en8` with your actual interface name (check with `ifconfig -a`)
+
+**macOS "Allow Accessory to Connect" prompt:**
+- When first connecting, macOS shows a permission dialog
+- The USB interface won't appear until you click "Allow"
+- The watchdog service automatically handles this delay
+- Check status: `systemctl status usb-interface-watchdog`
+- View logs: `tail -f /var/log/usb-interface-watchdog.log`
+
 **No DHCP lease:**
 - Check USB cable (must be data cable, not charge-only)
 - Verify g_ether module: `lsmod | grep g_ether`
-- Restart dnsmasq: `systemctl restart dnsmasq`
+- Check watchdog: `usb-interface-watchdog check`
 
 **No internet access:**
 - Check VPN status: `usb-router-status`
