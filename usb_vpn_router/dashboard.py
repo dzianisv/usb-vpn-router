@@ -106,26 +106,51 @@ class RouterStatus:
             if result.returncode == 0:
                 data = json.loads(result.stdout)
                 current_exit_node = None
+                available_exit_nodes = []
                 
-                # Find current exit node
+                # Process all peers
                 for peer_id, peer_data in data.get('Peer', {}).items():
+                    # Check for current exit node
                     if peer_data.get('ExitNode', False):
                         current_exit_node = {
+                            'id': peer_id,
                             'hostname': peer_data.get('HostName', 'Unknown'),
-                            'ip': peer_data.get('TailscaleIPs', [])[0] if peer_data.get('TailscaleIPs') else 'Unknown'
+                            'ip': peer_data.get('TailscaleIPs', [])[0] if peer_data.get('TailscaleIPs') else 'Unknown',
+                            'location': peer_data.get('Location', {}),
+                            'online': peer_data.get('Online', False)
                         }
-                        break
+                    
+                    # Collect available exit nodes
+                    if peer_data.get('ExitNodeOption', False):
+                        available_exit_nodes.append({
+                            'id': peer_id,
+                            'hostname': peer_data.get('HostName', 'Unknown'),
+                            'ip': peer_data.get('TailscaleIPs', [])[0] if peer_data.get('TailscaleIPs') else 'Unknown',
+                            'location': peer_data.get('Location', {}),
+                            'online': peer_data.get('Online', False),
+                            'is_current': peer_data.get('ExitNode', False)
+                        })
                 
                 vpn_status['tailscale'] = {
                     'status': 'UP',
                     'backend_state': data.get('BackendState', 'Unknown'),
                     'current_exit_node': current_exit_node,
-                    'peer_count': len(data.get('Peer', {}))
+                    'available_exit_nodes': sorted(available_exit_nodes, key=lambda x: x['hostname']),
+                    'peer_count': len(data.get('Peer', {})),
+                    'service_status': check_service_status('tailscaled')
                 }
             else:
-                vpn_status['tailscale'] = {'status': 'DOWN'}
+                vpn_status['tailscale'] = {
+                    'status': 'DOWN',
+                    'service_status': check_service_status('tailscaled'),
+                    'available_exit_nodes': []
+                }
         except Exception:
-            vpn_status['tailscale'] = {'status': 'ERROR'}
+            vpn_status['tailscale'] = {
+                'status': 'ERROR',
+                'service_status': check_service_status('tailscaled'),
+                'available_exit_nodes': []
+            }
         
         # OpenVPN status
         vpn_status['openvpn'] = {
@@ -283,6 +308,94 @@ def api_reset_usb():
             'output': result.stdout if result.returncode == 0 else result.stderr
         })
         
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/tailscale/exit-nodes')
+def api_tailscale_exit_nodes():
+    """Get available Tailscale exit nodes."""
+    try:
+        vpn_status = RouterStatus.get_vpn_status()
+        return jsonify({
+            'success': True,
+            'exit_nodes': vpn_status['tailscale'].get('available_exit_nodes', []),
+            'current_exit_node': vpn_status['tailscale'].get('current_exit_node')
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/tailscale/switch-exit-node', methods=['POST'])
+def api_tailscale_switch_exit_node():
+    """Switch Tailscale exit node."""
+    try:
+        data = request.get_json()
+        hostname = data.get('hostname', '')
+        
+        if hostname == 'none' or hostname == '':
+            # Disable exit node
+            result = run_command(['tailscale', 'up', '--exit-node='], capture_output=True)
+            message = 'Exit node disabled'
+        else:
+            # Switch to specified exit node
+            result = run_command(['tailscale', 'up', f'--exit-node={hostname}'], capture_output=True)
+            message = f'Switched to exit node: {hostname}'
+        
+        return jsonify({
+            'success': result.returncode == 0,
+            'message': message,
+            'output': result.stdout if result.returncode == 0 else result.stderr
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/tailscale/service/<action>', methods=['POST'])
+def api_tailscale_service(action):
+    """Start, stop, or restart Tailscale service."""
+    try:
+        if action not in ['start', 'stop', 'restart']:
+            return jsonify({'success': False, 'error': 'Invalid action'}), 400
+        
+        result = run_command(['systemctl', action, 'tailscaled'], capture_output=True)
+        
+        return jsonify({
+            'success': result.returncode == 0,
+            'message': f'Tailscale service {action}ed successfully',
+            'output': result.stdout if result.returncode == 0 else result.stderr
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/tailscale/authenticate')
+def api_tailscale_authenticate():
+    """Get Tailscale authentication URL."""
+    try:
+        # Try to get auth URL by running tailscale up without auth
+        result = run_command(['tailscale', 'up'], capture_output=True, check=False)
+        
+        # Extract URL from stderr (typical location for auth URL)
+        output = result.stderr + result.stdout
+        import re
+        url_match = re.search(r'https://login\.tailscale\.com/[^\s]+', output)
+        
+        if url_match:
+            return jsonify({
+                'success': True,
+                'auth_url': url_match.group(0),
+                'message': 'Visit the URL to authenticate'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Could not extract authentication URL',
+                'output': output
+            })
+            
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

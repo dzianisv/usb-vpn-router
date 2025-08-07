@@ -165,7 +165,20 @@
                         <div class="row">
                             <div class="col-md-4">
                                 <h6>Tailscale</h6>
-                                <span class="badge status-badge" id="tailscaleStatus">Loading...</span>
+                                <div class="d-flex align-items-center mb-2">
+                                    <span class="badge status-badge" id="tailscaleStatus">Loading...</span>
+                                    <div class="btn-group btn-group-sm ms-2">
+                                        <button class="btn btn-outline-success" onclick="controlTailscaleService('start')" title="Start Tailscale">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        <button class="btn btn-outline-warning" onclick="controlTailscaleService('restart')" title="Restart Tailscale">
+                                            <i class="fas fa-refresh"></i>
+                                        </button>
+                                        <button class="btn btn-outline-danger" onclick="controlTailscaleService('stop')" title="Stop Tailscale">
+                                            <i class="fas fa-stop"></i>
+                                        </button>
+                                    </div>
+                                </div>
                                 <div id="tailscaleDetails" class="mt-2 small text-muted"></div>
                                 <div id="exitNodeControls" class="mt-2"></div>
                             </div>
@@ -280,16 +293,14 @@
             // Tailscale
             const tsStatus = document.getElementById('tailscaleStatus');
             const tsDetails = document.getElementById('tailscaleDetails');
+            const exitNodeControls = document.getElementById('exitNodeControls');
             
             tsStatus.textContent = vpn.tailscale.status;
             tsStatus.className = 'badge status-badge ' + 
                 (vpn.tailscale.status === 'UP' ? 'bg-success' : 'bg-danger');
             
-            if (vpn.tailscale.current_exit_node) {
-                tsDetails.innerHTML = `Exit Node: ${vpn.tailscale.current_exit_node.hostname}`;
-            } else {
-                tsDetails.innerHTML = 'No exit node configured';
-            }
+            // Update exit node info and controls
+            updateExitNodeControls(vpn.tailscale, tsDetails, exitNodeControls);
             
             // OpenVPN
             const ovpnStatus = document.getElementById('openvpnStatus');
@@ -302,6 +313,44 @@
             monitorStatus.textContent = vpn.monitor;
             monitorStatus.className = 'badge status-badge ' + 
                 (vpn.monitor === 'active' ? 'bg-success' : 'bg-warning');
+        }
+        
+        function updateExitNodeControls(tailscale, detailsElement, controlsElement) {
+            // Update current exit node display
+            if (tailscale.current_exit_node) {
+                detailsElement.innerHTML = `Exit Node: ${tailscale.current_exit_node.hostname}`;
+            } else {
+                detailsElement.innerHTML = 'No exit node configured';
+            }
+            
+            // Build exit node controls
+            if (tailscale.status === 'UP' && tailscale.available_exit_nodes && tailscale.available_exit_nodes.length > 0) {
+                let html = '<div class="small mb-2"><strong>Available Exit Nodes:</strong></div>';
+                
+                // Add "Disable" button
+                const disableClass = !tailscale.current_exit_node ? 'btn-primary' : 'btn-outline-secondary';
+                html += `<button class="btn ${disableClass} btn-sm me-1 mb-1" onclick="switchExitNode('none')">
+                    <i class="fas fa-times"></i> Disable
+                </button>`;
+                
+                // Add buttons for each available exit node
+                tailscale.available_exit_nodes.forEach(node => {
+                    const isActive = tailscale.current_exit_node && node.hostname === tailscale.current_exit_node.hostname;
+                    const btnClass = isActive ? 'btn-success' : 'btn-outline-primary';
+                    const statusIcon = node.online ? 'fa-circle text-success' : 'fa-circle text-danger';
+                    const location = node.location && node.location.City ? ` (${node.location.City})` : '';
+                    
+                    html += `<button class="btn ${btnClass} btn-sm me-1 mb-1" onclick="switchExitNode('${node.hostname}')" title="${node.hostname}${location}">
+                        <i class="fas ${statusIcon}"></i> ${node.hostname}${location}
+                    </button>`;
+                });
+                
+                controlsElement.innerHTML = html;
+            } else if (tailscale.status === 'UP') {
+                controlsElement.innerHTML = '<div class="small text-muted">No exit nodes available</div>';
+            } else {
+                controlsElement.innerHTML = '<div class="small text-muted">Tailscale is not connected</div>';
+            }
         }
         
         function updateServices(services) {
@@ -376,6 +425,47 @@
                 if (data.success) {
                     showAlert('success', `Service ${service} restarted`);
                     setTimeout(updateStatus, 2000);
+                } else {
+                    showAlert('danger', 'Error: ' + data.error);
+                }
+            })
+            .catch(error => showAlert('danger', 'Network error'));
+        }
+        
+        function switchExitNode(hostname) {
+            const message = hostname === 'none' ? 'Disabling exit node...' : `Switching to exit node: ${hostname}...`;
+            showAlert('info', message);
+            
+            fetch('/api/tailscale/switch-exit-node', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({hostname: hostname})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert('success', data.message);
+                    setTimeout(updateStatus, 3000);
+                } else {
+                    showAlert('danger', 'Error: ' + data.error);
+                }
+            })
+            .catch(error => showAlert('danger', 'Network error'));
+        }
+        
+        function controlTailscaleService(action) {
+            const actionText = action.charAt(0).toUpperCase() + action.slice(1);
+            showAlert('info', `${actionText}ing Tailscale service...`);
+            
+            fetch(`/api/tailscale/service/${action}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert('success', data.message);
+                    setTimeout(updateStatus, 3000);
                 } else {
                     showAlert('danger', 'Error: ' + data.error);
                 }
