@@ -18,7 +18,7 @@ USB_INTERFACE="usb0"
 WAN_INTERFACE="${WAN_INTERFACE:-wlan0}"  # Can be overridden by environment variable
 TAILSCALE_INTERFACE="tailscale0"
 OPENVPN_INTERFACE="tun0"
-USE_TAILSCALE_EXIT="${USE_TAILSCALE_EXIT:-false}"  # Set to true to route through Tailscale
+USE_TAILSCALE_EXIT="${USE_TAILSCALE_EXIT:-true}"  # Default: route through VPN only
 USE_VPN_FAILOVER="${USE_VPN_FAILOVER:-true}"  # Enable automatic VPN failover
 
 # Colors for output
@@ -109,20 +109,106 @@ install_packages() {
 setup_usb_gadget() {
     log_info "Configuring USB gadget modules..."
     
+    # Detect if this is RK3399 (OrangePi 4 LTS)
+    if grep -q "rk3399" /proc/device-tree/compatible 2>/dev/null || [ -f /boot/dtb/rockchip/rk3399-orangepi-4-lts.dtb ]; then
+        log_info "Detected RK3399 board (OrangePi 4 LTS), applying specific configuration..."
+        
+        # Create proper DTS overlay for RK3399 USB-C peripheral mode
+        # IMPORTANT: Must target /usb@fe800000/dwc3@fe800000 (the DWC3 controller node)
+        # The DWC3 driver reads dr_mode from this specific node path
+        cat > /tmp/dwc3-peripheral.dts << 'DTSEOF'
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "rockchip,rk3399";
+
+    fragment@0 {
+        target-path = "/usb@fe800000/dwc3@fe800000";
+        __overlay__ {
+            compatible = "snps,dwc3";
+            dr_mode = "peripheral";
+            status = "okay";
+            reg = <0x0 0xfe800000 0x0 0x100000>;
+            phys = <&tcphy0_usb3>;
+            phy-names = "usb3-phy";
+            phy_type = "utmi_wide";
+            snps,dis_enblslpm_quirk;
+            snps,dis-u2-freeclk-exists-quirk;
+            snps,dis_u2_susphy_quirk;
+            snps,dis-del-phy-power-chg-quirk;
+            snps,xhci-slow-suspend-quirk;
+        };
+    };
+};
+DTSEOF
+        
+        # Apply overlay using armbian-add-overlay if available
+        if command -v armbian-add-overlay &>/dev/null; then
+            log_info "Applying USB peripheral mode overlay..."
+            
+            # Clean up any old/conflicting overlays
+            for old_overlay in dwc3-0-device usb-peripheral usb-peripheral-simple usb-gadget-fixed dwc3-peripheral-full dwc3-peripheral-simple dwc3-correct-path dwc3-peripheral; do
+                if [ -f "/boot/overlay-user/${old_overlay}.dtbo" ]; then
+                    log_info "Removing old overlay: ${old_overlay}"
+                    rm -f "/boot/overlay-user/${old_overlay}.dtbo"
+                    # Remove from armbianEnv.txt
+                    sed -i "s/${old_overlay}//g" /boot/armbianEnv.txt
+                    sed -i 's/  */ /g' /boot/armbianEnv.txt  # Clean up multiple spaces
+                fi
+            done
+            
+            armbian-add-overlay /tmp/dwc3-peripheral.dts
+            REBOOT_REQUIRED=true
+        fi
+        
+        # Configure modules to load at boot for RK3399
+        cat > /etc/modules-load.d/usb_gadget.conf << EOF
+# DWC3 core driver for USB-C controller
+dwc3
+# Ethernet gadget (includes RNDIS)
+g_ether
+EOF
+        
+        # Configure module parameters for RK3399
+        cat > /etc/modprobe.d/dwc3.conf << EOF
+# Force DWC3 to peripheral mode
+options dwc3 role=device
+EOF
+        
+        # Configure FUSB302 Type-C controller
+        cat > /etc/modprobe.d/fusb302.conf << EOF
+# Force FUSB302 to sink role
+options fusb302 port_type=2
+options tcpm tcpm_log_level=1
+EOF
+        
+        # Blacklist conflicting drivers
+        cat > /etc/modprobe.d/usb_gadget-blacklist.conf << EOF
+# Prevent other USB network drivers from interfering
+blacklist cdc_ncm
+EOF
+    else
+        # Standard configuration for other boards
+        cat > /etc/modules-load.d/usb_gadget.conf << EOF
+# USB Ethernet Gadget
+g_ether
+EOF
+    fi
+    
     # Create modprobe configuration for g_ether
     cat > /etc/modprobe.d/g_ether.conf << EOF
-# Configuration for USB Ethernet Gadget
-# use_eem=0 ensures compatibility with Windows and macOS
-options g_ether use_eem=0 dev_addr=02:00:00:00:00:01 host_addr=02:00:00:00:00:02
+# Use CDC-ECM mode for better macOS compatibility
+options g_ether use_eem=0 use_ecm=1
 EOF
 
-    # Ensure g_ether loads at boot
-    echo "g_ether" > /etc/modules-load.d/g_ether.conf
-    
     # Load the module now if not already loaded
     if ! lsmod | grep -q g_ether; then
-        modprobe g_ether use_eem=0
+        # Load without parameters so it uses /etc/modprobe.d/g_ether.conf
+        modprobe g_ether
         sleep 2
+    else
+        log_info "g_ether already loaded - may need reboot for new options to take effect"
     fi
 }
 
@@ -130,8 +216,26 @@ EOF
 setup_network_interface() {
     log_info "Configuring network interface for $USB_INTERFACE..."
     
-    # Check if using netplan or traditional networking
-    if [ -d /etc/netplan ]; then
+    # Check if using systemd-networkd (preferred on modern systems)
+    if systemctl is-enabled systemd-networkd &>/dev/null || [ -d /etc/systemd/network ]; then
+        log_info "Configuring via systemd-networkd..."
+        # Remove any old configs with wrong IP
+        rm -f /etc/systemd/network/*usb0*.network 2>/dev/null
+        
+        cat > /etc/systemd/network/20-usb0.network << EOF
+[Match]
+Name=$USB_INTERFACE
+
+[Network]
+Address=$USB_IP/24
+ConfigureWithoutCarrier=yes
+
+[Link]
+RequiredForOnline=no
+EOF
+        systemctl enable systemd-networkd 2>/dev/null || true
+        systemctl restart systemd-networkd || true
+    elif [ -d /etc/netplan ]; then
         # Netplan configuration
         cat > /etc/netplan/40-usb0.yaml << EOF
 network:
@@ -169,38 +273,41 @@ EOF
 setup_dhcp_server() {
     log_info "Configuring DHCP server..."
     
+    # Stop and disable systemd-resolved to avoid port 53 conflicts
+    if systemctl is-active systemd-resolved &>/dev/null; then
+        log_info "Disabling systemd-resolved to avoid conflicts..."
+        systemctl stop systemd-resolved
+        systemctl disable systemd-resolved
+    fi
+    
     # Backup original dnsmasq config if exists
     [ -f /etc/dnsmasq.conf ] && cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
     
-    # Create dnsmasq configuration for USB interface
-    cat > /etc/dnsmasq.d/usb0.conf << EOF
+    # Clear any existing dnsmasq.d configs that might conflict
+    rm -f /etc/dnsmasq.d/*.conf 2>/dev/null
+    
+    # Create main dnsmasq configuration
+    cat > /etc/dnsmasq.conf << EOF
 # DHCP Configuration for USB Ethernet Gadget
 interface=$USB_INTERFACE
 bind-interfaces
+except-interface=lo
 dhcp-range=$USB_DHCP_START,$USB_DHCP_END,12h
-dhcp-option=3,$USB_IP    # Default gateway
-dhcp-option=6,$USB_IP     # DNS server (dnsmasq on this device)
+dhcp-option=3,$USB_IP
+dhcp-option=6,$USB_IP
 
-# Enable DNS service
+# DNS Configuration
 port=53
-# Use Google and Cloudflare as upstream DNS servers
 server=8.8.8.8
-server=8.8.4.4
 server=1.1.1.1
-
-# Cache DNS queries
 cache-size=150
-# Don't forward local domains upstream
-local=/local/
 domain-needed
 bogus-priv
 
-# Logging for debugging
+# Logging
 log-dhcp
 log-queries
-
-# Prevent DNS rebinding attacks
-stop-dns-rebind
+log-facility=/var/log/dnsmasq.log
 EOF
 
     # Create systemd override to ensure dnsmasq starts after usb0
@@ -963,6 +1070,31 @@ main() {
         systemctl restart dnsmasq || true
     fi
     
+    # Check if reboot is required (for RK3399 boards)
+    if [ "${REBOOT_REQUIRED:-false}" = "true" ]; then
+        log_warn "IMPORTANT: REBOOT REQUIRED!"
+        log_warn "The USB device tree overlay has been applied."
+        log_warn "You must reboot for USB peripheral mode to work."
+        log_warn ""
+        log_warn "For Orange Pi 4 LTS: Due to a FUSB302 initialization bug,"
+        log_warn "connect power AND USB-C cable simultaneously during boot"
+        log_warn "for best results. This ensures peripheral mode is properly set."
+        log_info ""
+        read -p "Reboot now? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            reboot
+        fi
+    else
+        # Check if UDC is available (for boards that don't need reboot)
+        if ls /sys/class/udc/ 2>/dev/null | grep -q .; then
+            log_info "USB Device Controller found: $(ls /sys/class/udc/)"
+            log_info "USB gadget should be working!"
+        else
+            log_warn "No USB Device Controller found. You may need to reboot."
+        fi
+    fi
+    
     log_info "Setup complete!"
     log_info ""
     log_info "Next steps:"
@@ -986,8 +1118,6 @@ main() {
     log_info "To configure OpenVPN backup:"
     log_info "  1. Place .ovpn file in /etc/openvpn/client/"
     log_info "  2. Start: systemctl start openvpn-client@configname"
-    log_info ""
-    log_warn "Note: You may need to reboot for all changes to take effect"
 }
 
 # Run main function
