@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>USB VPN Router Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: bold;
+        }
+        .status-badge {
+            font-size: 0.9rem;
+            padding: 0.5rem 1rem;
+        }
+        .card-custom {
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .progress-custom {
+            height: 10px;
+            border-radius: 5px;
+        }
+        .navbar-custom {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .btn-custom {
+            border-radius: 20px;
+            padding: 0.5rem 1.5rem;
+        }
+        .status-up { color: #28a745; }
+        .status-down { color: #dc3545; }
+        .status-warning { color: #ffc107; }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-dark navbar-custom">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">
+                <i class="fas fa-router"></i> USB VPN Router Dashboard
+            </span>
+            <span class="navbar-text" id="lastUpdate">
+                Last update: <span id="timestamp">Loading...</span>
+            </span>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <!-- System Metrics Row -->
+        <div class="row">
+            <div class="col-md-3">
+                <div class="metric-card text-center">
+                    <i class="fas fa-microchip fa-2x mb-2"></i>
+                    <div class="metric-value" id="cpuPercent">--%</div>
+                    <div>CPU Usage</div>
+                    <div class="progress progress-custom mt-2">
+                        <div class="progress-bar bg-light" id="cpuProgress" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="metric-card text-center">
+                    <i class="fas fa-memory fa-2x mb-2"></i>
+                    <div class="metric-value" id="memoryPercent">--%</div>
+                    <div>Memory Usage</div>
+                    <div class="progress progress-custom mt-2">
+                        <div class="progress-bar bg-light" id="memoryProgress" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="metric-card text-center">
+                    <i class="fas fa-hdd fa-2x mb-2"></i>
+                    <div class="metric-value" id="diskPercent">--%</div>
+                    <div>Disk Usage</div>
+                    <div class="progress progress-custom mt-2">
+                        <div class="progress-bar bg-light" id="diskProgress" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="metric-card text-center">
+                    <i class="fas fa-clock fa-2x mb-2"></i>
+                    <div class="metric-value small" id="uptime">Loading...</div>
+                    <div>System Uptime</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- USB Interface Status -->
+            <div class="col-md-6">
+                <div class="card card-custom">
+                    <div class="card-header">
+                        <h5><i class="fas fa-usb"></i> USB Interface</h5>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <tr>
+                                <td><strong>Status:</strong></td>
+                                <td><span class="badge status-badge" id="usbStatus">Loading...</span></td>
+                            </tr>
+                            <tr>
+                                <td><strong>IP Address:</strong></td>
+                                <td id="usbIP">Loading...</td>
+                            </tr>
+                        </table>
+                        <button class="btn btn-warning btn-custom" onclick="resetUSB()">
+                            <i class="fas fa-refresh"></i> Reset Interface
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DHCP Leases -->
+            <div class="col-md-6">
+                <div class="card card-custom">
+                    <div class="card-header">
+                        <h5><i class="fas fa-network-wired"></i> Connected Devices</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="dhcpLeases">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- VPN Management -->
+            <div class="col-md-8">
+                <div class="card card-custom">
+                    <div class="card-header">
+                        <h5><i class="fas fa-shield-alt"></i> VPN Management</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- Routing Mode Control -->
+                        <div class="row mb-3">
+                            <div class="col-md-8">
+                                <h6>Routing Mode</h6>
+                                <p id="routingDescription">Loading...</p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <div class="btn-group">
+                                    <button class="btn btn-outline-primary btn-custom" onclick="switchRouting('local')">
+                                        <i class="fas fa-home"></i> Local WAN
+                                    </button>
+                                    <button class="btn btn-outline-success btn-custom" onclick="switchRouting('vpn')">
+                                        <i class="fas fa-shield-alt"></i> VPN
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- VPN Status -->
+                        <div class="row">
+                            <div class="col-md-4">
+                                <h6>Tailscale</h6>
+                                <span class="badge status-badge" id="tailscaleStatus">Loading...</span>
+                                <div id="tailscaleDetails" class="mt-2 small text-muted"></div>
+                                <div id="exitNodeControls" class="mt-2"></div>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>OpenVPN</h6>
+                                <span class="badge status-badge" id="openvpnStatus">Loading...</span>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>Monitor Service</h6>
+                                <span class="badge status-badge" id="monitorStatus">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Services -->
+            <div class="col-md-4">
+                <div class="card card-custom">
+                    <div class="card-header">
+                        <h5><i class="fas fa-cogs"></i> System Services</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="servicesList">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        // Initialize Socket.IO for real-time updates
+        const socket = io();
+        
+        // Update status every 30 seconds
+        setInterval(updateStatus, 30000);
+        
+        // Initial load
+        updateStatus();
+        
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateSystemMetrics(data.system);
+                    updateUSBInterface(data.usb_interface);
+                    updateDHCPLeases(data.dhcp_leases);
+                    updateVPNStatus(data.vpn);
+                    updateServices(data.services);
+                    updateTimestamp(data.timestamp);
+                })
+                .catch(error => console.error('Error fetching status:', error));
+        }
+        
+        function updateSystemMetrics(system) {
+            if (system.error) {
+                document.getElementById('cpuPercent').textContent = 'Error';
+                return;
+            }
+            
+            const cpu = Math.round(system.cpu_percent);
+            const memory = Math.round(system.memory.percent);
+            const disk = Math.round(system.disk.percent);
+            
+            document.getElementById('cpuPercent').textContent = cpu + '%';
+            document.getElementById('cpuProgress').style.width = cpu + '%';
+            
+            document.getElementById('memoryPercent').textContent = memory + '%';
+            document.getElementById('memoryProgress').style.width = memory + '%';
+            
+            document.getElementById('diskPercent').textContent = disk + '%';
+            document.getElementById('diskProgress').style.width = disk + '%';
+            
+            document.getElementById('uptime').textContent = system.uptime || 'Unknown';
+        }
+        
+        function updateUSBInterface(usb) {
+            const statusElement = document.getElementById('usbStatus');
+            const ipElement = document.getElementById('usbIP');
+            
+            statusElement.textContent = usb.status;
+            statusElement.className = 'badge status-badge ' + 
+                (usb.status === 'UP' ? 'bg-success' : 'bg-danger');
+            
+            ipElement.textContent = usb.ip_address || 'Not assigned';
+        }
+        
+        function updateDHCPLeases(leases) {
+            const container = document.getElementById('dhcpLeases');
+            
+            if (!leases || leases.length === 0) {
+                container.innerHTML = '<em class="text-muted">No connected devices</em>';
+                return;
+            }
+            
+            let html = '<div class="table-responsive"><table class="table table-sm"><thead><tr><th>Device</th><th>IP</th></tr></thead><tbody>';
+            
+            leases.forEach(lease => {
+                if (!lease.error) {
+                    html += `<tr><td>${lease.hostname}</td><td>${lease.ip}</td></tr>`;
+                }
+            });
+            
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+        
+        function updateVPNStatus(vpn) {
+            // Tailscale
+            const tsStatus = document.getElementById('tailscaleStatus');
+            const tsDetails = document.getElementById('tailscaleDetails');
+            
+            tsStatus.textContent = vpn.tailscale.status;
+            tsStatus.className = 'badge status-badge ' + 
+                (vpn.tailscale.status === 'UP' ? 'bg-success' : 'bg-danger');
+            
+            if (vpn.tailscale.current_exit_node) {
+                tsDetails.innerHTML = `Exit Node: ${vpn.tailscale.current_exit_node.hostname}`;
+            } else {
+                tsDetails.innerHTML = 'No exit node configured';
+            }
+            
+            // OpenVPN
+            const ovpnStatus = document.getElementById('openvpnStatus');
+            ovpnStatus.textContent = vpn.openvpn.status;
+            ovpnStatus.className = 'badge status-badge ' + 
+                (vpn.openvpn.status === 'UP' ? 'bg-success' : 'bg-danger');
+            
+            // Monitor
+            const monitorStatus = document.getElementById('monitorStatus');
+            monitorStatus.textContent = vpn.monitor;
+            monitorStatus.className = 'badge status-badge ' + 
+                (vpn.monitor === 'active' ? 'bg-success' : 'bg-warning');
+        }
+        
+        function updateServices(services) {
+            const container = document.getElementById('servicesList');
+            let html = '';
+            
+            for (const [service, status] of Object.entries(services)) {
+                const statusClass = status === 'active' ? 'bg-success' : 'bg-warning';
+                html += `
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>${service}</span>
+                        <div>
+                            <span class="badge ${statusClass}">${status}</span>
+                            <button class="btn btn-sm btn-outline-secondary ms-1" onclick="restartService('${service}')">
+                                <i class="fas fa-refresh"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function updateTimestamp(timestamp) {
+            if (timestamp) {
+                const date = new Date(timestamp);
+                document.getElementById('timestamp').textContent = date.toLocaleTimeString();
+            }
+        }
+        
+        function switchRouting(mode) {
+            fetch('/api/vpn/switch-routing', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: mode})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert('success', data.message);
+                    setTimeout(updateStatus, 2000);
+                } else {
+                    showAlert('danger', 'Error: ' + data.error);
+                }
+            })
+            .catch(error => showAlert('danger', 'Network error'));
+        }
+        
+        function resetUSB() {
+            fetch('/api/system/reset-usb', {method: 'POST'})
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showAlert('success', 'USB interface reset successfully');
+                        setTimeout(updateStatus, 3000);
+                    } else {
+                        showAlert('danger', 'Error: ' + data.error);
+                    }
+                })
+                .catch(error => showAlert('danger', 'Network error'));
+        }
+        
+        function restartService(service) {
+            fetch('/api/system/restart-service', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({service: service})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert('success', `Service ${service} restarted`);
+                    setTimeout(updateStatus, 2000);
+                } else {
+                    showAlert('danger', 'Error: ' + data.error);
+                }
+            })
+            .catch(error => showAlert('danger', 'Network error'));
+        }
+        
+        function showAlert(type, message) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            document.body.appendChild(alertDiv);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.parentNode.removeChild(alertDiv);
+                }
+            }, 5000);
+        }
+        
+        // Socket.IO event handlers
+        socket.on('status_update', function(data) {
+            updateSystemMetrics(data.system);
+        });
+    </script>
+</body>
+</html>

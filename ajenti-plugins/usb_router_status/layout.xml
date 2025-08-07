@@ -1,0 +1,235 @@
+<ui:bind xmlns:ui="http://dukebox.ajenti.org" xmlns:j="http://www.andreyev.com/angular">
+    <div class="container-fluid">
+        <div class="row">
+            <!-- System Overview -->
+            <div class="col-md-12">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-router"></i> USB Router Status
+                            <button class="btn btn-xs btn-primary pull-right" j:click="refresh()">
+                                <i class="fa fa-refresh"></i> Refresh
+                            </button>
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <!-- System Metrics Row -->
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="metric-box">
+                                    <h4>CPU Usage</h4>
+                                    <div class="metric-value">{{status.system.cpu_percent}}%</div>
+                                    <div class="progress">
+                                        <div class="progress-bar" style="width: {{status.system.cpu_percent}}%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="metric-box">
+                                    <h4>Memory Usage</h4>
+                                    <div class="metric-value">{{getMemoryPercent()}}%</div>
+                                    <div class="progress">
+                                        <div class="progress-bar" style="width: {{getMemoryPercent()}}%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="metric-box">
+                                    <h4>Disk Usage</h4>
+                                    <div class="metric-value">{{getDiskPercent()}}%</div>
+                                    <div class="progress">
+                                        <div class="progress-bar" style="width: {{getDiskPercent()}}%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="metric-box">
+                                    <h4>Uptime</h4>
+                                    <div class="metric-value small">{{status.system.uptime}}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- USB Interface Status -->
+            <div class="col-md-6">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-usb"></i> USB Interface
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <table class="table table-condensed">
+                            <tr>
+                                <td><strong>Status:</strong></td>
+                                <td>
+                                    <span class="label" 
+                                          ng-class="{'label-success': status.usb_interface.status === 'UP', 'label-danger': status.usb_interface.status !== 'UP'}">
+                                        {{status.usb_interface.status}}
+                                    </span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>IP Address:</strong></td>
+                                <td>{{status.usb_interface.ip_address}}</td>
+                            </tr>
+                            <tr>
+                                <td><strong>State:</strong></td>
+                                <td>{{status.usb_interface.state}}</td>
+                            </tr>
+                        </table>
+                        
+                        <div class="btn-group">
+                            <button class="btn btn-warning btn-sm" j:click="resetInterface()">
+                                <i class="fa fa-refresh"></i> Reset Interface
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DHCP Leases -->
+            <div class="col-md-6">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-network-wired"></i> DHCP Leases
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <div ng-if="status.dhcp_leases.length === 0" class="text-muted">
+                            No active DHCP leases
+                        </div>
+                        <table class="table table-condensed" ng-if="status.dhcp_leases.length > 0">
+                            <thead>
+                                <tr>
+                                    <th>IP</th>
+                                    <th>Hostname</th>
+                                    <th>MAC</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr ng-repeat="lease in status.dhcp_leases">
+                                    <td>{{lease.ip}}</td>
+                                    <td>{{lease.hostname}}</td>
+                                    <td>{{lease.mac}}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- VPN Status -->
+            <div class="col-md-8">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-shield-alt"></i> VPN Status
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <h5>Tailscale</h5>
+                                <span class="label" 
+                                      ng-class="{'label-success': status.vpn_status.tailscale.status === 'UP', 'label-danger': status.vpn_status.tailscale.status !== 'UP'}">
+                                    {{status.vpn_status.tailscale.status}}
+                                </span>
+                                <div ng-if="status.vpn_status.tailscale.exit_node">
+                                    <small><strong>Exit Node:</strong> {{status.vpn_status.tailscale.exit_node.hostname}}</small>
+                                </div>
+                                <div ng-if="status.vpn_status.tailscale.peers">
+                                    <small><strong>Peers:</strong> {{status.vpn_status.tailscale.peers}}</small>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-4">
+                                <h5>OpenVPN</h5>
+                                <span class="label" 
+                                      ng-class="{'label-success': status.vpn_status.openvpn.status === 'UP', 'label-danger': status.vpn_status.openvpn.status !== 'UP'}">
+                                    {{status.vpn_status.openvpn.status}}
+                                </span>
+                            </div>
+                            
+                            <div class="col-md-4">
+                                <h5>Monitor Service</h5>
+                                <span class="label" 
+                                      ng-class="{'label-success': status.vpn_status.monitor === 'active', 'label-danger': status.vpn_status.monitor !== 'active'}">
+                                    {{status.vpn_status.monitor}}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Services -->
+            <div class="col-md-4">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-cogs"></i> Services
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <table class="table table-condensed">
+                            <tr ng-repeat="(service, status_val) in status.services">
+                                <td>{{service}}</td>
+                                <td>
+                                    <span class="label" 
+                                          ng-class="{'label-success': status_val === 'active', 'label-danger': status_val !== 'active'}">
+                                        {{status_val}}
+                                    </span>
+                                </td>
+                                <td>
+                                    <button class="btn btn-xs btn-warning" j:click="restartService(service)">
+                                        <i class="fa fa-refresh"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Routing Information -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-route"></i> Routing Information
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h5>Main Routing Table</h5>
+                                <pre>{{status.routing.main}}</pre>
+                            </div>
+                            <div class="col-md-6">
+                                <h5>VPN Routing Table</h5>
+                                <pre>{{status.routing.usb_vpn}}</pre>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h5>Routing Rules</h5>
+                                <pre>{{status.routing.rules}}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</ui:bind>

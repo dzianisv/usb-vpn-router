@@ -1,0 +1,254 @@
+<ui:bind xmlns:ui="http://dukebox.ajenti.org" xmlns:j="http://www.andreyev.com/angular">
+    <div class="container-fluid">
+        <!-- Routing Mode Control -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="panel panel-primary">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-route"></i> Routing Mode
+                            <button class="btn btn-xs btn-default pull-right" j:click="refreshStatus()">
+                                <i class="fa fa-refresh"></i> Refresh
+                            </button>
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <h5>Current Mode: <span class="label label-info">{{vpnStatus.routing.mode}}</span></h5>
+                                <p>{{vpnStatus.routing.description}}</p>
+                            </div>
+                            <div class="col-md-4 text-right">
+                                <div class="btn-group">
+                                    <button class="btn btn-warning" 
+                                            ng-class="{'btn-success': vpnStatus.routing.mode === 'local'}"
+                                            j:click="switchRouting('local')"
+                                            ng-disabled="switching">
+                                        <i class="fa fa-home"></i> Local WAN
+                                    </button>
+                                    <button class="btn btn-warning" 
+                                            ng-class="{'btn-success': vpnStatus.routing.mode === 'tailscale' || vpnStatus.routing.mode === 'openvpn'}"
+                                            j:click="switchRouting('vpn')"
+                                            ng-disabled="switching">
+                                        <i class="fa fa-shield-alt"></i> VPN
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Tailscale Management -->
+            <div class="col-md-6">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-shield-alt"></i> Tailscale Management
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <!-- Connection Status -->
+                        <div class="status-section">
+                            <h5>Connection Status</h5>
+                            <div ng-if="vpnStatus.tailscale.connected">
+                                <span class="label label-success">Connected</span>
+                                <small class="text-muted">({{vpnStatus.tailscale.backend_state}})</small>
+                                
+                                <!-- Current Exit Node -->
+                                <div class="mt-2" ng-if="vpnStatus.tailscale.current_exit_node">
+                                    <strong>Current Exit Node:</strong> {{vpnStatus.tailscale.current_exit_node.hostname}}
+                                    <br><small>IP: {{vpnStatus.tailscale.current_exit_node.tailscale_ip}}</small>
+                                </div>
+                                <div class="mt-2" ng-if="!vpnStatus.tailscale.current_exit_node">
+                                    <span class="text-muted">No exit node configured</span>
+                                </div>
+                            </div>
+                            <div ng-if="!vpnStatus.tailscale.connected">
+                                <span class="label label-danger">Disconnected</span>
+                                <div class="mt-2">
+                                    <button class="btn btn-primary btn-sm" j:click="authenticateTailscale()">
+                                        <i class="fa fa-sign-in-alt"></i> Authenticate
+                                    </button>
+                                </div>
+                                <div ng-if="vpnStatus.tailscale.error" class="alert alert-danger mt-2">
+                                    {{vpnStatus.tailscale.error}}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Exit Node Selection -->
+                        <div class="exit-nodes-section" ng-if="vpnStatus.tailscale.connected && vpnStatus.tailscale.available_exit_nodes.length > 0">
+                            <h5>Available Exit Nodes</h5>
+                            <div class="list-group">
+                                <div class="list-group-item" 
+                                     ng-repeat="node in vpnStatus.tailscale.available_exit_nodes"
+                                     ng-class="{'list-group-item-success': node.is_current}">
+                                    <div class="row">
+                                        <div class="col-md-8">
+                                            <strong>{{node.hostname}}</strong>
+                                            <br><small>{{node.tailscale_ip}}</small>
+                                            <span class="label label-xs" 
+                                                  ng-class="{'label-success': node.online, 'label-default': !node.online}">
+                                                {{node.online ? 'Online' : 'Offline'}}
+                                            </span>
+                                            <span class="label label-primary label-xs" ng-if="node.is_current">Current</span>
+                                        </div>
+                                        <div class="col-md-4 text-right">
+                                            <button class="btn btn-xs btn-primary" 
+                                                    j:click="switchExitNode(node.hostname)"
+                                                    ng-disabled="node.is_current || switching || !node.online">
+                                                <i class="fa fa-arrow-right"></i> Use
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Disable Exit Node Option -->
+                                <div class="list-group-item">
+                                    <div class="row">
+                                        <div class="col-md-8">
+                                            <strong>Disable Exit Node</strong>
+                                            <br><small>Use direct Tailscale connection</small>
+                                        </div>
+                                        <div class="col-md-4 text-right">
+                                            <button class="btn btn-xs btn-warning" 
+                                                    j:click="switchExitNode('none')"
+                                                    ng-disabled="!vpnStatus.tailscale.current_exit_node || switching">
+                                                <i class="fa fa-times"></i> Disable
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- No Exit Nodes Available -->
+                        <div ng-if="vpnStatus.tailscale.connected && vpnStatus.tailscale.available_exit_nodes.length === 0" 
+                             class="alert alert-info">
+                            <i class="fa fa-info-circle"></i> No exit nodes available in your Tailscale network.
+                            <br><small>Ask someone to share an exit node with: <code>tailscale up --advertise-exit-node</code></small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- OpenVPN Management -->
+            <div class="col-md-6">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-key"></i> OpenVPN Management
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <!-- Connection Status -->
+                        <div class="status-section">
+                            <h5>Connection Status</h5>
+                            <div>
+                                <span class="label" 
+                                      ng-class="{'label-success': vpnStatus.openvpn.connected, 'label-danger': !vpnStatus.openvpn.connected}">
+                                    {{vpnStatus.openvpn.connected ? 'Connected' : 'Disconnected'}}
+                                </span>
+                            </div>
+                            
+                            <div ng-if="!vpnStatus.openvpn.connected && vpnStatus.openvpn.error" 
+                                 class="alert alert-warning mt-2">
+                                {{vpnStatus.openvpn.error}}
+                            </div>
+                        </div>
+
+                        <!-- Interface Details -->
+                        <div ng-if="vpnStatus.openvpn.connected" class="mt-3">
+                            <h6>Interface Details</h6>
+                            <pre class="small">{{vpnStatus.openvpn.interface_details}}</pre>
+                        </div>
+
+                        <!-- Service Status -->
+                        <div class="mt-3">
+                            <h6>Service Status</h6>
+                            <pre class="small">{{vpnStatus.openvpn.service_status}}</pre>
+                        </div>
+
+                        <!-- Controls -->
+                        <div class="mt-3">
+                            <button class="btn btn-warning btn-sm" j:click="restartOpenVPN()" ng-disabled="switching">
+                                <i class="fa fa-refresh"></i> Restart OpenVPN
+                            </button>
+                        </div>
+
+                        <!-- Configuration Help -->
+                        <div class="alert alert-info mt-3">
+                            <strong>Configuration:</strong>
+                            <br>Place .ovpn files in <code>/etc/openvpn/client/</code>
+                            <br>Start with: <code>systemctl start openvpn-client@configname</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VPN Monitor Control -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">
+                            <i class="fa fa-eye"></i> VPN Failover Monitor
+                        </h3>
+                    </div>
+                    <div class="panel-body">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <p>The VPN monitor automatically switches between Tailscale and OpenVPN when connections fail.</p>
+                                <p><strong>Current Status:</strong> 
+                                    <span class="label" ng-class="{'label-success': monitorActive, 'label-danger': !monitorActive}">
+                                        {{monitorActive ? 'Active' : 'Inactive'}}
+                                    </span>
+                                </p>
+                            </div>
+                            <div class="col-md-4 text-right">
+                                <button class="btn" 
+                                        ng-class="{'btn-success': !monitorActive, 'btn-danger': monitorActive}"
+                                        j:click="toggleMonitor()"
+                                        ng-disabled="switching">
+                                    <i class="fa" ng-class="{'fa-play': !monitorActive, 'fa-stop': monitorActive}"></i>
+                                    {{monitorActive ? 'Stop' : 'Start'}} Monitor
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Authentication Modal -->
+        <div ng-if="authUrl" class="modal fade" id="authModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Tailscale Authentication</h5>
+                        <button type="button" class="close" j:click="closeAuthModal()">
+                            <span>&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Visit this URL to authenticate your device with Tailscale:</p>
+                        <div class="well">
+                            <a href="{{authUrl}}" target="_blank">{{authUrl}}</a>
+                        </div>
+                        <p><small>This link will open in a new window. Return here after authentication.</small></p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" j:click="closeAuthModal()">Close</button>
+                        <button type="button" class="btn btn-primary" j:click="refreshStatus(); closeAuthModal()">
+                            <i class="fa fa-refresh"></i> Check Status
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</ui:bind>

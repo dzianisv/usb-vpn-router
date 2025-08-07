@@ -293,8 +293,9 @@ interface=$USB_INTERFACE
 bind-interfaces
 except-interface=lo
 dhcp-range=$USB_DHCP_START,$USB_DHCP_END,12h
-dhcp-option=3,$USB_IP
-dhcp-option=6,$USB_IP
+dhcp-option=3,$USB_IP    # Default gateway
+dhcp-option=6,$USB_IP     # DNS server (dnsmasq on this device)
+dhcp-option=usb0,26,1280
 
 # DNS Configuration
 port=53

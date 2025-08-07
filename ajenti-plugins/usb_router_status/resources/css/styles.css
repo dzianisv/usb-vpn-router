@@ -1,0 +1,174 @@
+/* USB Router Status Plugin Styles */
+
+.metric-box {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.metric-box h4 {
+    margin: 0 0 10px 0;
+    font-size: 14px;
+    color: #6c757d;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.metric-value {
+    font-size: 24px;
+    font-weight: bold;
+    color: #495057;
+    margin-bottom: 10px;
+}
+
+.metric-value.small {
+    font-size: 12px;
+    font-weight: normal;
+}
+
+.progress {
+    height: 8px;
+    background-color: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    background-color: #007bff;
+    transition: width 0.3s ease;
+}
+
+/* Status labels */
+.label-success {
+    background-color: #28a745;
+}
+
+.label-danger {
+    background-color: #dc3545;
+}
+
+.label-warning {
+    background-color: #ffc107;
+    color: #212529;
+}
+
+/* Panel styling */
+.panel {
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    margin-bottom: 20px;
+}
+
+.panel-heading {
+    background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    padding: 10px 15px;
+    border-radius: 5px 5px 0 0;
+}
+
+.panel-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.panel-body {
+    padding: 15px;
+}
+
+/* Table styling */
+.table-condensed td {
+    padding: 5px 8px;
+    border-top: 1px solid #dee2e6;
+}
+
+.table-condensed th {
+    padding: 8px;
+    border-bottom: 2px solid #dee2e6;
+    font-weight: 600;
+    background: #f8f9fa;
+}
+
+/* Pre-formatted text */
+pre {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 3px;
+    padding: 10px;
+    font-size: 11px;
+    line-height: 1.4;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+/* Button styling */
+.btn {
+    border-radius: 3px;
+    font-weight: 500;
+}
+
+.btn-primary {
+    background-color: #007bff;
+    border-color: #007bff;
+}
+
+.btn-warning {
+    background-color: #ffc107;
+    border-color: #ffc107;
+    color: #212529;
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+.btn-xs {
+    padding: 2px 5px;
+    font-size: 11px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .metric-box {
+        margin-bottom: 10px;
+    }
+    
+    .metric-value {
+        font-size: 18px;
+    }
+    
+    .panel-body {
+        padding: 10px;
+    }
+    
+    pre {
+        font-size: 10px;
+        max-height: 150px;
+    }
+}
+
+/* Loading state */
+.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Status indicators */
+.status-up {
+    color: #28a745;
+}
+
+.status-down {
+    color: #dc3545;
+}
+
+.status-warning {
+    color: #ffc107;
+}
