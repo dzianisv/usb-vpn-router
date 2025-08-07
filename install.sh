@@ -20,7 +20,7 @@ ENABLE_DASHBOARD=false
 USE_TAILSCALE_EXIT=false
 WAN_INTERFACE="wlan0"
 USB_NETWORK="192.168.64.0/24"
-GITHUB_REPO="yourusername/usb-vpn-router"
+GITHUB_REPO="dzianisv/usb-vpn-router"
 BRANCH="main"
 
 # Logging functions
@@ -93,7 +93,7 @@ Options:
     --use-tailscale-exit    Route USB clients through Tailscale exit node
     --wan-interface IFACE   WAN interface name (default: wlan0)
     --usb-network CIDR      USB client network (default: 192.168.64.0/24)
-    --repo REPO            GitHub repository (default: yourusername/usb-vpn-router)
+    --repo REPO            GitHub repository (default: dzianisv/usb-vpn-router)
     --branch BRANCH        Git branch (default: main)
     --help                 Show this help message
 

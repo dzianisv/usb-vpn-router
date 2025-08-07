@@ -20,7 +20,7 @@ setup(
     description='Turn your Orange Pi into a secure USB ethernet gadget with VPN routing',
     long_description=read_readme(),
     long_description_content_type='text/markdown',
-    url='https://github.com/yourusername/usb-vpn-router',
+    url='https://github.com/dzianisv/usb-vpn-router',
     packages=find_packages(),
     classifiers=[
         'Development Status :: 4 - Beta',

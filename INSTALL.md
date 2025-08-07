@@ -4,14 +4,14 @@
 
 ```bash
 # One-line installation from GitHub
-curl -sSL https://raw.githubusercontent.com/yourusername/usb-vpn-router/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/dzianisv/usb-vpn-router/main/install.sh | sudo bash
 ```
 
 ## 🐍 Python Package Installation
 
 ```bash
 # Install directly from GitHub using pip
-sudo pip3 install git+https://github.com/yourusername/usb-vpn-router.git
+sudo pip3 install git+https://github.com/dzianisv/usb-vpn-router.git
 
 # Run the installer
 sudo usb-router-setup --enable-dashboard
@@ -147,7 +147,7 @@ ip addr show usb0
 
 ```bash
 # Update to latest version
-sudo pip3 install --upgrade git+https://github.com/yourusername/usb-vpn-router.git
+sudo pip3 install --upgrade git+https://github.com/dzianisv/usb-vpn-router.git
 
 # Reinstall configuration
 sudo usb-router-setup --enable-dashboard

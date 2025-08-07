@@ -15,9 +15,25 @@ Turn your Orange Pi (or similar SBC) into a secure USB ethernet gadget that rout
 
 ## Quick Start
 
+### Option 1: One-Line Installer (Recommended)
+```bash
+# Install with web dashboard
+curl -sSL https://raw.githubusercontent.com/dzianisv/usb-vpn-router/main/install.sh | sudo bash -s -- --enable-dashboard
+```
+
+### Option 2: Python Package Install
+```bash
+# Install package
+sudo pip3 install git+https://github.com/dzianisv/usb-vpn-router.git
+
+# Run installer with dashboard
+sudo usb-router-setup --enable-dashboard
+```
+
+### Option 3: Manual Install
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/usb-vpn-router.git
+git clone https://github.com/dzianisv/usb-vpn-router.git
 cd usb-vpn-router
 
 # Run setup (routes USB clients through VPN)
@@ -25,6 +41,21 @@ sudo USE_TAILSCALE_EXIT=true bash setup-usb-router.sh
 
 # Connect your device via USB and it will receive an IP via DHCP
 ```
+
+## Web Dashboard
+
+After installation with `--enable-dashboard`, access the web interface:
+
+**URL:** `http://192.168.64.1:8000`
+
+**Features:**
+- Real-time system monitoring (CPU, RAM, disk)
+- USB interface status and control
+- VPN management and exit node switching
+- DHCP lease monitoring
+- Service control with one-click restart
+
+**Default Login:** admin/admin (⚠️ change immediately!)
 
 ## How It Works
 
