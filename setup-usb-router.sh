@@ -114,9 +114,8 @@ setup_usb_gadget() {
         log_info "Detected RK3399 board (OrangePi 4 LTS), applying specific configuration..."
         
         # Create proper DTS overlay for RK3399 USB-C peripheral mode
-        # IMPORTANT: Must target /usb@fe800000/usb@fe800000 (the inner DWC3 controller node)
-        # not just /usb@fe800000 (the outer wrapper). The DWC3 driver reads dr_mode from
-        # the inner node to determine peripheral vs host mode.
+        # IMPORTANT: Must target /usb@fe800000/dwc3@fe800000 (the DWC3 controller node)
+        # The DWC3 driver reads dr_mode from this specific node path
         cat > /tmp/dwc3-peripheral.dts << 'DTSEOF'
 /dts-v1/;
 /plugin/;
@@ -125,10 +124,20 @@ setup_usb_gadget() {
     compatible = "rockchip,rk3399";
 
     fragment@0 {
-        target-path = "/usb@fe800000/usb@fe800000";
+        target-path = "/usb@fe800000/dwc3@fe800000";
         __overlay__ {
+            compatible = "snps,dwc3";
             dr_mode = "peripheral";
             status = "okay";
+            reg = <0x0 0xfe800000 0x0 0x100000>;
+            phys = <&tcphy0_usb3>;
+            phy-names = "usb3-phy";
+            phy_type = "utmi_wide";
+            snps,dis_enblslpm_quirk;
+            snps,dis-u2-freeclk-exists-quirk;
+            snps,dis_u2_susphy_quirk;
+            snps,dis-del-phy-power-chg-quirk;
+            snps,xhci-slow-suspend-quirk;
         };
     };
 };
@@ -139,7 +148,7 @@ DTSEOF
             log_info "Applying USB peripheral mode overlay..."
             
             # Clean up any old/conflicting overlays
-            for old_overlay in dwc3-0-device usb-peripheral usb-peripheral-simple usb-gadget-fixed dwc3-peripheral-full dwc3-peripheral-simple dwc3-correct-path; do
+            for old_overlay in dwc3-0-device usb-peripheral usb-peripheral-simple usb-gadget-fixed dwc3-peripheral-full dwc3-peripheral-simple dwc3-correct-path dwc3-peripheral; do
                 if [ -f "/boot/overlay-user/${old_overlay}.dtbo" ]; then
                     log_info "Removing old overlay: ${old_overlay}"
                     rm -f "/boot/overlay-user/${old_overlay}.dtbo"
@@ -157,8 +166,21 @@ DTSEOF
         cat > /etc/modules-load.d/usb_gadget.conf << EOF
 # DWC3 core driver for USB-C controller
 dwc3
-# Ethernet gadget (includes RNDIS/ECM for macOS)
+# Ethernet gadget (includes RNDIS)
 g_ether
+EOF
+        
+        # Configure module parameters for RK3399
+        cat > /etc/modprobe.d/dwc3.conf << EOF
+# Force DWC3 to peripheral mode
+options dwc3 role=device
+EOF
+        
+        # Configure FUSB302 Type-C controller
+        cat > /etc/modprobe.d/fusb302.conf << EOF
+# Force FUSB302 to sink role
+options fusb302 port_type=2
+options tcpm tcpm_log_level=1
 EOF
         
         # Blacklist conflicting drivers
@@ -176,9 +198,8 @@ EOF
     
     # Create modprobe configuration for g_ether
     cat > /etc/modprobe.d/g_ether.conf << EOF
-# Configuration for USB Ethernet Gadget
-# use_eem=0 ensures compatibility with Windows and macOS
-options g_ether use_eem=0 dev_addr=02:00:00:00:00:01 host_addr=02:00:00:00:00:02
+# Use CDC-ECM mode for better macOS compatibility
+options g_ether use_eem=0 use_ecm=1
 EOF
 
     # Load the module now if not already loaded
@@ -506,6 +527,10 @@ main() {
         log_warn "IMPORTANT: REBOOT REQUIRED!"
         log_warn "The USB device tree overlay has been applied."
         log_warn "You must reboot for USB peripheral mode to work."
+        log_warn ""
+        log_warn "For Orange Pi 4 LTS: Due to a FUSB302 initialization bug,"
+        log_warn "connect power AND USB-C cable simultaneously during boot"
+        log_warn "for best results. This ensures peripheral mode is properly set."
         log_info ""
         read -p "Reboot now? (y/n): " -n 1 -r
         echo
