@@ -57,7 +57,8 @@ def run_command(
     text: bool = True,
     timeout: Optional[int] = None,
     stdout_file: Optional[str] = None,
-    stderr_file: Optional[str] = None
+    stderr_file: Optional[str] = None,
+    env: Optional[dict] = None
 ) -> subprocess.CompletedProcess:
     """
     Run a system command with proper error handling.
@@ -100,7 +101,8 @@ def run_command(
             stdout=stdout,
             stderr=stderr,
             text=text,
-            timeout=timeout
+            timeout=timeout,
+            env=env
         )
         return result
     

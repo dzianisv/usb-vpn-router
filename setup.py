@@ -79,6 +79,9 @@ setup(
             'configs/*',
         ],
     },
+    data_files=[
+        ('share/usb-vpn-router', ['setup-usb-router.sh']),
+    ],
     include_package_data=True,
     zip_safe=False,
     platforms=['Linux'],

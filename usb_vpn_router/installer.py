@@ -55,14 +55,31 @@ def main(use_tailscale_exit, enable_vpn_failover, enable_dashboard,
         if not skip_packages:
             install_packages()
         
-        router.setup_usb_gadget()
-        router.setup_network_interface()
-        router.setup_dhcp_server()
-        router.setup_nat_and_routing()
-        router.setup_openvpn()
-        router.setup_tailscale()
-        router.create_helper_scripts()
-        router.create_systemd_services()
+        # Use the existing battle-tested bash script for core setup
+        bash_script_path = Path(__file__).parent.parent / 'setup-usb-router.sh'
+        if bash_script_path.exists():
+            log_info("Running existing setup script for core router configuration...")
+            
+            # Build environment variables for the bash script
+            env = os.environ.copy()
+            env.update({
+                'USE_TAILSCALE_EXIT': 'true' if config.use_tailscale_exit else 'false',
+                'USE_VPN_FAILOVER': 'true' if config.enable_vpn_failover else 'false',
+                'WAN_INTERFACE': config.wan_interface,
+            })
+            
+            run_command(['bash', str(bash_script_path)], env=env)
+        else:
+            log_warn("setup-usb-router.sh not found, using Python implementation")
+            # Fallback to Python implementation
+            router.setup_usb_gadget()
+            router.setup_network_interface()
+            router.setup_dhcp_server()
+            router.setup_nat_and_routing()
+            router.setup_openvpn()
+            router.setup_tailscale()
+            router.create_helper_scripts()
+            router.create_systemd_services()
         
         if enable_dashboard:
             install_web_dashboard()
