@@ -84,6 +84,10 @@ systemctl start openvpn-client@backup
 - UART pins for console access: TX (pin 8), RX (pin 10), GND (pin 6)
 - Power can be supplied through micro-USB or GPIO pins
 
+### Orange Pi 4 LTS
+
+![Orange Pi 4 LTS](images/orangepi4lts-pinout.webp)
+
 ## Requirements
 
 - Debian/Ubuntu-based OS
