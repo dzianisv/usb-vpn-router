@@ -55,12 +55,12 @@ cp your-config.ovpn /etc/openvpn/client/backup.conf
 systemctl start openvpn-client@backup
 ```
 
-### Helper Commands
 
-- `usb-router-status` - Check router and VPN status
-- `usb-router-reset` - Reset USB interface
-- `usb-router-tailscale on/off` - Control VPN routing
-- `usb-router-vpn-monitor status` - Check failover status
+### useful commands
+
+```bash
+iw dev wlan0 link
+```
 
 ## Security
 
@@ -88,6 +88,11 @@ systemctl start openvpn-client@backup
 
 ![Orange Pi 4 LTS](images/orangepi4lts-pinout.webp)
 
+## Orange Pi Zero 2w
+
+https://www.armbian.com/orange-pi-zero-2w/
+
+
 ## Requirements
 
 - Debian/Ubuntu-based OS
@@ -96,6 +101,7 @@ systemctl start openvpn-client@backup
 - Internet connection for initial setup
 
 ## Troubleshooting
+
 
 **macOS USB Interface Not Active:**
 - After connecting the USB cable and allowing the accessory, the interface may appear as "inactive"

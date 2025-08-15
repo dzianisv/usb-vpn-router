@@ -1,0 +1,2 @@
+Armbian_25.5.1_Orangepizero2w_noble_current_6.12.23_minimal-tailscale-rndis-usb-serial.img.bz2 filter=lfs diff=lfs merge=lfs -text
+*.bz2 filter=lfs diff=lfs merge=lfs -text

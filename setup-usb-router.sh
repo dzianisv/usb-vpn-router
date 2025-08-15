@@ -61,6 +61,33 @@ detect_distro() {
     log_info "Detected OS: $OS $VER"
 }
 
+# Board plugin loader (sources boards/*/setup.sh and selects matching board)
+BOARD_NAME=""
+BOARD_OVERRIDES_GADGET=false
+
+load_board_plugin() {
+    local script_dir boards_dir f
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    boards_dir="$script_dir/boards"
+    for f in "$boards_dir"/*/setup.sh; do
+        [ -f "$f" ] || continue
+        # shellcheck source=/dev/null
+        . "$f"
+        if declare -F board_detect >/dev/null && board_detect; then
+            : "${BOARD_NAME:=$(basename "$(dirname "$f")")}"
+            log_info "Board detected: $BOARD_NAME (plugin: $(basename "$(dirname "$f")"))"
+            return 0
+        fi
+        # No match; cleanup symbols before trying next
+        unset -f board_detect 2>/dev/null || true
+        unset -f board_required_packages 2>/dev/null || true
+        unset -f board_apply_dts_overlay 2>/dev/null || true
+        unset -f board_setup_gadget 2>/dev/null || true
+        unset BOARD_NAME BOARD_OVERRIDES_GADGET 2>/dev/null || true
+    done
+    return 0
+}
+
 # Install required packages
 install_packages() {
     log_info "Checking and installing required packages..."
@@ -80,6 +107,17 @@ install_packages() {
                 openvpn
                 jq
             )
+            # Merge board-specific packages if plugin defines them
+            if declare -F board_required_packages >/dev/null; then
+                local board_pkgs
+                # shellcheck disable=SC2207
+                board_pkgs=($(board_required_packages))
+                if [ ${#board_pkgs[@]} -gt 0 ]; then
+                    for pkg in "${board_pkgs[@]}"; do
+                        packages+=("$pkg")
+                    done
+                fi
+            fi
             
             # Check which packages need to be installed
             local to_install=()
@@ -108,93 +146,18 @@ install_packages() {
 # Configure USB gadget modules
 setup_usb_gadget() {
     log_info "Configuring USB gadget modules..."
+    # If a board plugin wants to fully handle gadget setup, delegate and return
+    if [ "${BOARD_OVERRIDES_GADGET:-false}" = "true" ] && declare -F board_setup_gadget >/dev/null; then
+        log_info "Delegating USB gadget setup to board plugin: ${BOARD_NAME:-unknown}"
+        board_setup_gadget
+        return
+    fi
     
-    # Detect if this is RK3399 (OrangePi 4 LTS)
-    if grep -q "rk3399" /proc/device-tree/compatible 2>/dev/null || [ -f /boot/dtb/rockchip/rk3399-orangepi-4-lts.dtb ]; then
-        log_info "Detected RK3399 board (OrangePi 4 LTS), applying specific configuration..."
-        
-        # Create proper DTS overlay for RK3399 USB-C peripheral mode
-        # IMPORTANT: Must target /usb@fe800000/dwc3@fe800000 (the DWC3 controller node)
-        # The DWC3 driver reads dr_mode from this specific node path
-        cat > /tmp/dwc3-peripheral.dts << 'DTSEOF'
-/dts-v1/;
-/plugin/;
-
-/ {
-    compatible = "rockchip,rk3399";
-
-    fragment@0 {
-        target-path = "/usb@fe800000/dwc3@fe800000";
-        __overlay__ {
-            compatible = "snps,dwc3";
-            dr_mode = "peripheral";
-            status = "okay";
-            reg = <0x0 0xfe800000 0x0 0x100000>;
-            phys = <&tcphy0_usb3>;
-            phy-names = "usb3-phy";
-            phy_type = "utmi_wide";
-            snps,dis_enblslpm_quirk;
-            snps,dis-u2-freeclk-exists-quirk;
-            snps,dis_u2_susphy_quirk;
-            snps,dis-del-phy-power-chg-quirk;
-            snps,xhci-slow-suspend-quirk;
-        };
-    };
-};
-DTSEOF
-        
-        # Apply overlay using armbian-add-overlay if available
-        if command -v armbian-add-overlay &>/dev/null; then
-            log_info "Applying USB peripheral mode overlay..."
-            
-            # Clean up any old/conflicting overlays
-            for old_overlay in dwc3-0-device usb-peripheral usb-peripheral-simple usb-gadget-fixed dwc3-peripheral-full dwc3-peripheral-simple dwc3-correct-path dwc3-peripheral; do
-                if [ -f "/boot/overlay-user/${old_overlay}.dtbo" ]; then
-                    log_info "Removing old overlay: ${old_overlay}"
-                    rm -f "/boot/overlay-user/${old_overlay}.dtbo"
-                    # Remove from armbianEnv.txt
-                    sed -i "s/${old_overlay}//g" /boot/armbianEnv.txt
-                    sed -i 's/  */ /g' /boot/armbianEnv.txt  # Clean up multiple spaces
-                fi
-            done
-            
-            armbian-add-overlay /tmp/dwc3-peripheral.dts
-            REBOOT_REQUIRED=true
-        fi
-        
-        # Configure modules to load at boot for RK3399
-        cat > /etc/modules-load.d/usb_gadget.conf << EOF
-# DWC3 core driver for USB-C controller
-dwc3
-# Ethernet gadget (includes RNDIS)
-g_ether
-EOF
-        
-        # Configure module parameters for RK3399
-        cat > /etc/modprobe.d/dwc3.conf << EOF
-# Force DWC3 to peripheral mode
-options dwc3 role=device
-EOF
-        
-        # Configure FUSB302 Type-C controller
-        cat > /etc/modprobe.d/fusb302.conf << EOF
-# Force FUSB302 to sink role
-options fusb302 port_type=2
-options tcpm tcpm_log_level=1
-EOF
-        
-        # Blacklist conflicting drivers
-        cat > /etc/modprobe.d/usb_gadget-blacklist.conf << EOF
-# Prevent other USB network drivers from interfering
-blacklist cdc_ncm
-EOF
-    else
-        # Standard configuration for other boards
-        cat > /etc/modules-load.d/usb_gadget.conf << EOF
+    # Standard configuration for generic boards
+    cat > /etc/modules-load.d/usb_gadget.conf << EOF
 # USB Ethernet Gadget
 g_ether
 EOF
-    fi
     
     # Create modprobe configuration for g_ether
     cat > /etc/modprobe.d/g_ether.conf << EOF
@@ -1050,7 +1013,12 @@ main() {
     
     check_root
     detect_distro
+    load_board_plugin
     install_packages
+    if declare -F board_apply_dts_overlay >/dev/null; then
+        log_info "Applying board DTS overlay via plugin"
+        board_apply_dts_overlay
+    fi
     setup_usb_gadget
     setup_network_interface
     setup_dhcp_server
