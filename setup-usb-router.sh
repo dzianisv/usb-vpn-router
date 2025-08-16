@@ -184,8 +184,18 @@ EOF
 setup_network_interface() {
     log_info "Configuring network interface for $USB_INTERFACE..."
     
-    # Check if using systemd-networkd (preferred on modern systems)
-    if systemctl is-enabled systemd-networkd &>/dev/null || [ -d /etc/systemd/network ]; then
+    # If NetworkManager is active (common on Armbian), create a profile via nmcli
+    if systemctl is-active NetworkManager &>/dev/null; then
+        log_info "Configuring via NetworkManager..."
+        if ! nmcli -t -f NAME con show | grep -Fxq "USB Gadget"; then
+            nmcli con add type ethernet ifname "$USB_INTERFACE" con-name "USB Gadget" ipv4.method manual ipv4.addresses "$USB_IP/24" ipv6.method ignore autoconnect yes || true
+        else
+            nmcli con mod "USB Gadget" ipv4.method manual ipv4.addresses "$USB_IP/24" ipv6.method ignore autoconnect yes || true
+        fi
+        nmcli con up "USB Gadget" || true
+
+    # Otherwise, check if using systemd-networkd (preferred on modern systems)
+    elif systemctl is-enabled systemd-networkd &>/dev/null || [ -d /etc/systemd/network ]; then
         log_info "Configuring via systemd-networkd..."
         # Remove any old configs with wrong IP
         rm -f /etc/systemd/network/*usb0*.network 2>/dev/null
@@ -371,7 +381,6 @@ EOF
     fi
     
     # Persist firewall rules using netfilter-persistent and nftables
-    mkdir -p /etc/iptables
     if command -v netfilter-persistent &>/dev/null; then
         log_info "Saving firewall rules via netfilter-persistent"
         netfilter-persistent save || true
@@ -420,10 +429,7 @@ EOF
         fi
     fi
 
-    # Fallback: also save iptables rules to rules.v4 for compatibility (may be empty when using nftables)
-    if command -v iptables-save &>/dev/null; then
-        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-    fi
+    # Note: iptables persistence not used; nftables is authoritative
 }
 
 # Install and configure OpenVPN
@@ -464,18 +470,13 @@ setup_tailscale() {
     if command -v tailscale >/dev/null 2>&1; then
         log_info "Tailscale already installed"
     else
-        case $OS in
-        debian|ubuntu|armbian)
-            # Install dependencies including jq for JSON parsing
-            apt-get install -y jq
-            
-            curl -fsSL https://pkgs.tailscale.com/stable/debian/bullseye.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-            curl -fsSL https://pkgs.tailscale.com/stable/debian/bullseye.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list
-            
-                apt-get update
-            apt-get install -y tailscale
-                ;;
-        esac
+        # Prefer official installer script which handles Debian/Ubuntu/Armbian variants
+        if curl -fsSL https://tailscale.com/install.sh | sh; then
+            log_info "Tailscale installed via official script"
+        else
+            log_warn "Tailscale install script failed; attempting apt install from distro repos"
+            apt-get update && apt-get install -y tailscale || log_error "Failed to install Tailscale"
+        fi
     fi
     
     systemctl enable tailscaled
@@ -488,7 +489,7 @@ setup_tailscale() {
 net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
 EOF
-    sysctl -p /etc/sysctl.d/99-forwarding.conf
+    sysctl -p /etc/sysctl.d/99-tailscale.conf
     
     # If USE_TAILSCALE_EXIT is true, we'll use split routing (USB clients only)
     if [ "$USE_TAILSCALE_EXIT" = "true" ]; then
@@ -520,6 +521,11 @@ create_helper_scripts() {
 #!/bin/bash
 echo "=== USB Router Status ==="
 echo
+# Config (baked for this device)
+USB_NETWORK="192.168.64.0/24"
+TAILSCALE_INTERFACE="tailscale0"
+OPENVPN_INTERFACE="tun0"
+
 echo "USB Interface:"
 ip addr show usb0 2>/dev/null || echo "  Interface not found"
 echo
@@ -530,16 +536,19 @@ else
     echo "  No active leases"
 fi
 echo
-echo "NAT Rules:"
-iptables -t nat -L POSTROUTING -n -v | grep MASQUERADE
+echo "NAT (nft) postrouting chain:"
+nft list chain ip usb_router_nat postrouting 2>/dev/null || echo "  (no usb_router_nat table)"
+echo
+echo "Forwarding (nft) forward chain:"
+nft list chain inet usb_router_filter forward 2>/dev/null || echo "  (no usb_router_filter table)"
 echo
 echo "Routing:"
 if ip rule show | grep -q "from $USB_NETWORK table usb_vpn"; then
     echo "  USB clients use VPN routing table"
     current_route=$(ip route show table usb_vpn 2>/dev/null | grep default || echo "No default route")
-    if echo "$current_route" | grep -q "tailscale0"; then
+    if echo "$current_route" | grep -q "$TAILSCALE_INTERFACE"; then
         echo "  Active VPN: Tailscale"
-    elif echo "$current_route" | grep -q "tun0"; then
+    elif echo "$current_route" | grep -q "$OPENVPN_INTERFACE"; then
         echo "  Active VPN: OpenVPN (failover)"
     else
         echo "  Active VPN: None configured"
@@ -549,8 +558,8 @@ else
 fi
 echo ""
 echo "VPN Status:"
-echo "  Tailscale: $(ip link show tailscale0 &>/dev/null && echo "UP" || echo "DOWN")"
-echo "  OpenVPN: $(ip link show tun0 &>/dev/null && echo "UP" || echo "DOWN")"
+echo "  Tailscale: $(ip link show $TAILSCALE_INTERFACE &>/dev/null && echo "UP" || echo "DOWN")"
+echo "  OpenVPN: $(ip link show $OPENVPN_INTERFACE &>/dev/null && echo "UP" || echo "DOWN")"
 if systemctl is-active usb-router-vpn-monitor &>/dev/null; then
     echo "  Failover Monitor: Active"
 else
@@ -571,7 +580,7 @@ set -e
 usage() {
   echo "Usage: $0 {on|off|status}"
   echo "  on     - Enable and select a Tailscale exit node"
-  echo "  off    - Disable exit node (no routing changes in iptables)"
+  echo "  off    - Disable exit node (no routing changes)"
   echo "  status - Show Tailscale status and current exit node"
   exit 1
 }
@@ -689,11 +698,6 @@ switch_to_tailscale() {
         ip route add default dev $TAILSCALE_INTERFACE table usb_vpn
     fi
     
-    # Update iptables
-    iptables -t nat -D POSTROUTING -o $OPENVPN_INTERFACE -s $USB_NETWORK -j MASQUERADE 2>/dev/null || true
-    iptables -t nat -C POSTROUTING -o $TAILSCALE_INTERFACE -s $USB_NETWORK -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -o $TAILSCALE_INTERFACE -s $USB_NETWORK -j MASQUERADE
-    
     log_msg "Switched to Tailscale successfully"
 }
 
@@ -704,11 +708,6 @@ switch_to_openvpn() {
     ip route del default table usb_vpn 2>/dev/null || true
     # OpenVPN usually sets up routes automatically, just use the interface
     ip route add default dev $OPENVPN_INTERFACE table usb_vpn
-    
-    # Update iptables
-    iptables -t nat -D POSTROUTING -o $TAILSCALE_INTERFACE -s $USB_NETWORK -j MASQUERADE 2>/dev/null || true
-    iptables -t nat -C POSTROUTING -o $OPENVPN_INTERFACE -s $USB_NETWORK -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -o $OPENVPN_INTERFACE -s $USB_NETWORK -j MASQUERADE
     
     log_msg "Switched to OpenVPN successfully"
 }
@@ -980,7 +979,6 @@ main() {
     log_info ""
     log_info "Helper commands:"
     log_info "  usb-router-status          - Check router status"
-    log_info "  usb-router-reset           - Reset USB interface"
     log_info "  usb-router-tailscale       - Switch between local/Tailscale routing"
     log_info "  usb-router-vpn-monitor     - Check VPN failover status"
     log_info "  usb-interface-watchdog     - Check USB interface watchdog"
