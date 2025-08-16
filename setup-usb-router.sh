@@ -54,11 +54,16 @@ detect_distro() {
         . /etc/os-release
         OS=$ID
         VER=$VERSION_ID
+        CODENAME=${VERSION_CODENAME:-}
     else
         log_error "Cannot detect OS distribution"
         exit 1
     fi
-    log_info "Detected OS: $OS $VER"
+    if [ -n "$CODENAME" ]; then
+        log_info "Detected OS: $OS $VER ($CODENAME)"
+    else
+        log_info "Detected OS: $OS $VER"
+    fi
 }
 
 # Board plugin loader (sources boards/*/setup.sh and selects matching board)
@@ -97,10 +102,10 @@ install_packages() {
             # List of required packages
             local packages=(
                 dnsmasq
-                iptables-persistent
+                netfilter-persistent
+                nftables
                 tcpdump
                 curl
-                wget
                 gnupg
                 lsb-release
                 ca-certificates
@@ -224,12 +229,6 @@ iface $USB_INTERFACE inet static
 EOF
         fi
     fi
-    
-    # Bring up the interface immediately if it exists
-    if ip link show $USB_INTERFACE &>/dev/null; then
-        ip link set $USB_INTERFACE up
-        ip addr add $USB_IP/24 dev $USB_INTERFACE 2>/dev/null || true
-    fi
 }
 
 # Configure DHCP server
@@ -298,17 +297,37 @@ setup_nat() {
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/30-ip-forward.conf
     sysctl -w net.ipv4.ip_forward=1
     
-    # Set default FORWARD policy to REJECT (fail-safe)
-    log_info "Setting default FORWARD policy to REJECT"
-    iptables -P FORWARD DROP
-    ip6tables -P FORWARD DROP
-    
-    # Clear existing FORWARD rules to start fresh
-    iptables -F FORWARD
-    ip6tables -F FORWARD
-    
-    # Clear existing NAT rules
-    iptables -t nat -F POSTROUTING
+    # Use nftables: create dedicated tables that lock down forwarding and apply masquerade
+    # Clean up previous runs
+    if command -v nft &>/dev/null; then
+        nft list table inet usb_router_filter &>/dev/null && nft delete table inet usb_router_filter || true
+        nft list table ip usb_router_nat &>/dev/null && nft delete table ip usb_router_nat || true
+        
+        # Build ruleset: only allow usb0 -> tailscale0/tun0 and established back; drop everything else on forward
+        nft -f - <<EOF
+table inet usb_router_filter {
+  chain forward {
+    type filter hook forward priority 0;
+    policy drop;
+    ct state established,related accept
+    iifname "${USB_INTERFACE}" oifname "${TAILSCALE_INTERFACE}" accept
+    iifname "${USB_INTERFACE}" oifname "${OPENVPN_INTERFACE}" accept
+    oifname "${USB_INTERFACE}" ct state related,established accept
+  }
+}
+
+table ip usb_router_nat {
+  chain postrouting {
+    type nat hook postrouting priority 100;
+    ip saddr ${USB_NETWORK} oifname "${TAILSCALE_INTERFACE}" masquerade
+    ip saddr ${USB_NETWORK} oifname "${OPENVPN_INTERFACE}" masquerade
+  }
+}
+EOF
+        log_info "Applied nftables rules: forward only usb0->tailscale0/tun0 with masquerade"
+    else
+        log_warn "nft command not found; cannot apply nftables rules"
+    fi
     
     if [ "$USE_TAILSCALE_EXIT" = "true" ]; then
         log_info "Setting up VPN-only routing for USB clients"
@@ -338,44 +357,72 @@ setup_nat() {
             fi
         fi
         
-        # NAT for USB clients through both VPN interfaces (failover support)
-        iptables -t nat -A POSTROUTING -o $TAILSCALE_INTERFACE -s $USB_NETWORK -j MASQUERADE
-        iptables -t nat -A POSTROUTING -o $OPENVPN_INTERFACE -s $USB_NETWORK -j MASQUERADE
-        
-        # With default DROP policy, only allow specific VPN routes
-        log_info "Allowing ONLY USB to VPN forwarding (default DROP for everything else)"
-        
-        # IPv4: Allow ONLY USB to VPN interfaces
-        iptables -A FORWARD -i $USB_INTERFACE -o $TAILSCALE_INTERFACE -j ACCEPT
-        iptables -A FORWARD -i $USB_INTERFACE -o $OPENVPN_INTERFACE -j ACCEPT
-        iptables -A FORWARD -i $TAILSCALE_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-        iptables -A FORWARD -i $OPENVPN_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-        
-        # IPv6: Allow ONLY USB to VPN interfaces
-        ip6tables -A FORWARD -i $USB_INTERFACE -o $TAILSCALE_INTERFACE -j ACCEPT
-        ip6tables -A FORWARD -i $USB_INTERFACE -o $OPENVPN_INTERFACE -j ACCEPT
-        ip6tables -A FORWARD -i $TAILSCALE_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-        ip6tables -A FORWARD -i $OPENVPN_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
+        # Forwarding and masquerade already handled by nftables above
+        log_info "USB clients can ONLY route through VPN interfaces (nftables enforced)"
         
         # Ensure local traffic is not affected
         ip rule add from 192.168.0.0/16 to 192.168.0.0/16 table main priority 50
         ip rule add from 10.0.0.0/8 to 10.0.0.0/8 table main priority 50
         
-        log_info "USB clients can ONLY route through VPN interfaces (no leaks possible)"
+        log_info "No leaks possible: forwarding restricted to ${TAILSCALE_INTERFACE} and ${OPENVPN_INTERFACE}"
     else
-        log_info "Setting up local WAN routing"
-        
-        # Standard NAT through WAN interface
-        iptables -t nat -A POSTROUTING -o $WAN_INTERFACE -s $USB_NETWORK -j MASQUERADE
-        iptables -A FORWARD -i $USB_INTERFACE -o $WAN_INTERFACE -j ACCEPT
-        iptables -A FORWARD -i $WAN_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
+        # Even when not using Tailscale exit, keep forwarding restricted to VPN interfaces only
+        log_info "Restricting forwarding to VPN interfaces only via nftables"
     fi
     
-    # Save iptables rules
+    # Persist firewall rules using netfilter-persistent and nftables
+    mkdir -p /etc/iptables
     if command -v netfilter-persistent &>/dev/null; then
-        netfilter-persistent save
-    else
-        iptables-save > /etc/iptables/rules.v4
+        log_info "Saving firewall rules via netfilter-persistent"
+        netfilter-persistent save || true
+    fi
+
+    # Detect if we are running inside a chroot
+    in_chroot=false
+    if command -v systemd-detect-virt &>/dev/null && systemd-detect-virt --chroot --quiet; then
+        in_chroot=true
+    fi
+
+    if command -v nft &>/dev/null; then
+        if [ "$in_chroot" = true ]; then
+            # In chroot: don't query host kernel ruleset; write our intended config directly
+            log_info "Chroot detected: writing nftables config to /etc/nftables.conf without querying kernel"
+            cat > /etc/nftables.conf << EOF
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet usb_router_filter {
+  chain forward {
+    type filter hook forward priority 0;
+    policy drop;
+    ct state established,related accept
+    iifname "${USB_INTERFACE}" oifname "${TAILSCALE_INTERFACE}" accept
+    iifname "${USB_INTERFACE}" oifname "${OPENVPN_INTERFACE}" accept
+    oifname "${USB_INTERFACE}" ct state related,established accept
+  }
+}
+
+table ip usb_router_nat {
+  chain postrouting {
+    type nat hook postrouting priority 100;
+    ip saddr ${USB_NETWORK} oifname "${TAILSCALE_INTERFACE}" masquerade
+    ip saddr ${USB_NETWORK} oifname "${OPENVPN_INTERFACE}" masquerade
+  }
+}
+EOF
+            # Skip systemctl in chroot
+        else
+            # On a real system, persist the live ruleset and enable service
+            log_info "Writing current nftables ruleset to /etc/nftables.conf and enabling nftables service"
+            nft list ruleset > /etc/nftables.conf 2>/dev/null || true
+            systemctl enable nftables 2>/dev/null || true
+            systemctl restart nftables 2>/dev/null || true
+        fi
+    fi
+
+    # Fallback: also save iptables rules to rules.v4 for compatibility (may be empty when using nftables)
+    if command -v iptables-save &>/dev/null; then
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
     fi
 }
 
@@ -414,7 +461,10 @@ setup_tailscale() {
     log_info "Installing Tailscale..."
     
     # Add Tailscale's GPG key and repository
-    case $OS in
+    if command -v tailscale >/dev/null 2>&1; then
+        log_info "Tailscale already installed"
+    else
+        case $OS in
         debian|ubuntu|armbian)
             # Install dependencies including jq for JSON parsing
             apt-get install -y jq
@@ -422,10 +472,11 @@ setup_tailscale() {
             curl -fsSL https://pkgs.tailscale.com/stable/debian/bullseye.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
             curl -fsSL https://pkgs.tailscale.com/stable/debian/bullseye.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list
             
-            apt-get update
+                apt-get update
             apt-get install -y tailscale
-            ;;
-    esac
+                ;;
+        esac
+    fi
     
     systemctl enable tailscaled
     systemctl start tailscaled
@@ -437,7 +488,7 @@ setup_tailscale() {
 net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
 EOF
-    sysctl -p /etc/sysctl.d/99-tailscale.conf
+    sysctl -p /etc/sysctl.d/99-forwarding.conf
     
     # If USE_TAILSCALE_EXIT is true, we'll use split routing (USB clients only)
     if [ "$USE_TAILSCALE_EXIT" = "true" ]; then
@@ -512,221 +563,77 @@ systemctl is-active tailscaled | xargs echo "  tailscale:"
 EOF
     chmod +x /usr/local/bin/usb-router-status
     
-    # Reset script
-    cat > /usr/local/bin/usb-router-reset << 'EOF'
-#!/bin/bash
-echo "Resetting USB router..."
-systemctl restart systemd-networkd
-modprobe -r g_ether && modprobe g_ether use_eem=0
-sleep 2
-ip link set usb0 up
-ip addr add 192.168.64.1/24 dev usb0 2>/dev/null || true
-systemctl restart dnsmasq
-echo "USB router reset complete"
-EOF
-    chmod +x /usr/local/bin/usb-router-reset
-    
     # Tailscale routing switch script
     cat > /usr/local/bin/usb-router-tailscale << 'EOF'
 #!/bin/bash
-# Switch USB router traffic between local WAN and Tailscale exit node
-
-USB_NETWORK="192.168.64.0/24"
-USB_INTERFACE="usb0"
-WAN_INTERFACE="${WAN_INTERFACE:-wlan0}"
-TAILSCALE_INTERFACE="tailscale0"
+set -e
 
 usage() {
-    echo "Usage: $0 [on|off|status]"
-    echo "  on     - Route USB traffic through Tailscale exit node"
-    echo "  off    - Route USB traffic through local WAN"
-    echo "  status - Show current routing status"
-    exit 1
+  echo "Usage: $0 {on|off|status}"
+  echo "  on     - Enable and select a Tailscale exit node"
+  echo "  off    - Disable exit node (no routing changes in iptables)"
+  echo "  status - Show Tailscale status and current exit node"
+  exit 1
 }
 
-get_available_exit_nodes() {
-    # Get list of available exit nodes
-    tailscale status --json | jq -r '.Peer[] | select(.ExitNodeOption == true) | .HostName' 2>/dev/null
+require_ts() {
+  command -v tailscale >/dev/null 2>&1 || { echo "tailscale CLI not found"; exit 1; }
+  tailscale status >/dev/null 2>&1 || { echo "Tailscale not authenticated. Run: tailscale up"; exit 1; }
+}
+
+get_exit_nodes() {
+  tailscale status --json | jq -r '.Peer[] | select(.ExitNodeOption==true) | .HostName' 2>/dev/null || true
 }
 
 select_exit_node() {
-    local exit_nodes=($(get_available_exit_nodes))
-    
-    if [ ${#exit_nodes[@]} -eq 0 ]; then
-        echo "Error: No exit nodes available in your Tailscale network"
-        echo "Ask someone to share an exit node with: tailscale up --advertise-exit-node"
-        return 1
-    fi
-    
-    if [ ${#exit_nodes[@]} -eq 1 ]; then
-        echo "Found one exit node: ${exit_nodes[0]}"
-        echo "${exit_nodes[0]}"
-        return 0
-    fi
-    
+  local nodes=($(get_exit_nodes))
+  if [ ${#nodes[@]} -eq 0 ]; then
+    echo ""; return 1
+  elif [ ${#nodes[@]} -eq 1 ]; then
+    echo "${nodes[0]}"; return 0
+  else
     echo "Available exit nodes:"
     local i=1
-    for node in "${exit_nodes[@]}"; do
-        echo "  $i) $node"
-        ((i++))
-    done
-    
-    read -p "Select exit node (1-${#exit_nodes[@]}): " selection
-    
-    if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le ${#exit_nodes[@]} ]; then
-        echo "${exit_nodes[$((selection-1))]}"
-        return 0
-    else
-        echo "Invalid selection"
-        return 1
+    for n in "${nodes[@]}"; do echo "  $i) $n"; ((i++)); done
+    read -p "Select exit node (1-${#nodes[@]}): " sel
+    if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le ${#nodes[@]} ]; then
+      echo "${nodes[$((sel-1))]}"; return 0
     fi
+    return 1
+  fi
 }
 
-enable_tailscale_routing() {
-    echo "Enabling Tailscale split routing (USB clients only)..."
-    
-    # Make sure device maintains local network access
-    echo "Ensuring device maintains local network access..."
-    tailscale set --exit-node-allow-lan-access=true 2>/dev/null || true
-    
-    # Check if Tailscale is connected
-    if ! tailscale status &>/dev/null; then
-        echo "Error: Tailscale is not authenticated. Run 'tailscale up' first"
-        return 1
-    fi
-    
-    # Create custom routing table for USB clients if not exists
-    if ! grep -q "usb_vpn" /etc/iproute2/rt_tables; then
-        echo "200 usb_vpn" >> /etc/iproute2/rt_tables
-    fi
-    
-    # Get available exit nodes for routing USB traffic
-    local exit_nodes=($(get_available_exit_nodes))
-    if [ ${#exit_nodes[@]} -eq 0 ]; then
-        echo "Warning: No exit nodes available. USB clients will use direct Tailscale routing"
-    else
-        echo "Available exit nodes for USB client routing:"
-        for node in "${exit_nodes[@]}"; do
-            echo "  - $node"
-        done
-    fi
-    
-    # Set up split routing - only USB clients go through VPN
-    ip rule del from $USB_NETWORK table usb_vpn 2>/dev/null || true
-    ip rule add from $USB_NETWORK table usb_vpn priority 200
-    
-    # Find Tailscale gateway
-    local ts_gateway=$(ip route show dev $TAILSCALE_INTERFACE | grep -E '^100\.' | head -1 | awk '{print $1}')
-    if [ -n "$ts_gateway" ]; then
-        ip route add default via $ts_gateway dev $TAILSCALE_INTERFACE table usb_vpn 2>/dev/null || true
-    else
-        # Fallback - use the interface directly
-        ip route add default dev $TAILSCALE_INTERFACE table usb_vpn 2>/dev/null || true
-    fi
-    
-    # Ensure local traffic bypasses VPN routing
-    ip rule del from 192.168.0.0/16 to 192.168.0.0/16 table main 2>/dev/null || true
-    ip rule del from 10.0.0.0/8 to 10.0.0.0/8 table main 2>/dev/null || true
-    ip rule add from 192.168.0.0/16 to 192.168.0.0/16 table main priority 50
-    ip rule add from 10.0.0.0/8 to 10.0.0.0/8 table main priority 50
-    
-    # With default DROP policy, we only need to manage allow rules
-    # Clear existing rules
-    iptables -F FORWARD
-    ip6tables -F FORWARD
-    
-    # Clear NAT rules
-    iptables -t nat -F POSTROUTING
-    
-    # Add NAT for both VPN interfaces
-    iptables -t nat -A POSTROUTING -o $TAILSCALE_INTERFACE -s $USB_NETWORK -j MASQUERADE
-    iptables -t nat -A POSTROUTING -o tun0 -s $USB_NETWORK -j MASQUERADE
-    
-    # Allow ONLY USB to VPN forwarding (everything else is dropped by default)
-    iptables -A FORWARD -i $USB_INTERFACE -o $TAILSCALE_INTERFACE -j ACCEPT
-    iptables -A FORWARD -i $USB_INTERFACE -o tun0 -j ACCEPT
-    iptables -A FORWARD -i $TAILSCALE_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -A FORWARD -i tun0 -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-    
-    # Same for IPv6
-    ip6tables -A FORWARD -i $USB_INTERFACE -o $TAILSCALE_INTERFACE -j ACCEPT
-    ip6tables -A FORWARD -i $USB_INTERFACE -o tun0 -j ACCEPT
-    ip6tables -A FORWARD -i $TAILSCALE_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-    ip6tables -A FORWARD -i tun0 -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-    
-    # Save rules
-    if command -v netfilter-persistent &>/dev/null; then
-        netfilter-persistent save
-    else
-        iptables-save > /etc/iptables/rules.v4
-    fi
-    
-    echo ""
-    echo "✓ Split routing enabled:"
-    echo "  - USB clients (192.168.64.0/24) → Tailscale VPN only"
-    echo "  - Orange Pi device → Local network (SSH access maintained)"
-    echo ""
-    echo "Current routing rules:"
-    ip rule show | grep -E "(usb_vpn|192.168|10.0)" | sed 's/^/  /'
+cmd_on() {
+  require_ts
+  tailscale set --exit-node-allow-lan-access=true 2>/dev/null || true
+  node="$(select_exit_node)" || { echo "No exit nodes available. Ensure one is advertised and shared."; exit 1; }
+  echo "Enabling exit node: $node"
+  tailscale set --exit-node="$node"
 }
 
-disable_tailscale_routing() {
-    echo "Disabling Tailscale routing..."
-    
-    # Clear ALL existing NAT rules for USB network
-    iptables -t nat -D POSTROUTING -s $USB_NETWORK -j MASQUERADE 2>/dev/null || true
-    iptables -D FORWARD -i $USB_INTERFACE -j ACCEPT 2>/dev/null || true
-    iptables -D FORWARD -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-    
-    # Clear any specific interface rules
-    for iface in $WAN_INTERFACE $TAILSCALE_INTERFACE tun0; do
-        iptables -t nat -D POSTROUTING -o $iface -s $USB_NETWORK -j MASQUERADE 2>/dev/null || true
-        iptables -D FORWARD -i $USB_INTERFACE -o $iface -j ACCEPT 2>/dev/null || true
-        iptables -D FORWARD -i $iface -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-    done
-    
-    # Remove the DROP rule that blocks WAN access
-    iptables -D FORWARD -i $USB_INTERFACE -o $WAN_INTERFACE -j DROP 2>/dev/null || true
-    
-    # Add local WAN routing rules
-    iptables -t nat -A POSTROUTING -o $WAN_INTERFACE -s $USB_NETWORK -j MASQUERADE
-    iptables -A FORWARD -i $USB_INTERFACE -o $WAN_INTERFACE -j ACCEPT
-    iptables -A FORWARD -i $WAN_INTERFACE -o $USB_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-    
-    # Save rules
-    if command -v netfilter-persistent &>/dev/null; then
-        netfilter-persistent save
-    else
-        iptables-save > /etc/iptables/rules.v4
-    fi
-    
-    echo "USB traffic now routed through local WAN"
-    echo "Note: You may want to disable the exit node with: tailscale up --exit-node=''"
+cmd_off() {
+  require_ts
+  echo "Clearing exit node"
+  tailscale set --exit-node=
 }
 
-show_status() {
-    echo "Current routing configuration:"
-    if iptables -t nat -L POSTROUTING -n | grep -q "MASQUERADE.*$TAILSCALE_INTERFACE"; then
-        echo "  USB traffic is routed through Tailscale"
-        tailscale status | grep "offers exit node" || echo "  Warning: No exit node configured"
-    else
-        echo "  USB traffic is routed through local WAN ($WAN_INTERFACE)"
-    fi
+cmd_status() {
+  require_ts
+  echo "Tailscale status:"
+  tailscale status | sed 's/^/  /'
+  cur=$(tailscale status --json | jq -r '.Self.ExitNode | select(.!=null)')
+  if [ -n "$cur" ]; then
+    echo "Current exit node: $cur"
+  else
+    echo "Current exit node: none"
+  fi
 }
 
-case "$1" in
-    on)
-        enable_tailscale_routing
-        ;;
-    off)
-        disable_tailscale_routing
-        ;;
-    status)
-        show_status
-        ;;
-    *)
-        usage
-        ;;
+case "${1:-status}" in
+  on) cmd_on ;;
+  off) cmd_off ;;
+  status) cmd_status ;;
+  *) usage ;;
 esac
 EOF
     chmod +x /usr/local/bin/usb-router-tailscale
